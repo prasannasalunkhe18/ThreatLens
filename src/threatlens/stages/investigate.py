@@ -7,7 +7,8 @@ from pathlib import Path
 
 from threatlens.github_client import GitHubClient, GitHubClientError, PullRequest
 from threatlens.models import InvestigationResult, Skill, Threat
-from threatlens.providers.base import LLMProvider, llm_call
+from threatlens.providers.base import LLMProvider
+from threatlens.providers.chain import call_with_schema
 
 GENERIC_PROMPT_PATH = Path(__file__).resolve().parents[3] / "prompts" / "investigate_generic.md"
 
@@ -167,7 +168,9 @@ def run_investigation(
     file_context: str = "",
 ) -> InvestigationResult:
     prompt = build_investigation_prompt(pr, threat, skill, file_context)
-    result = llm_call(provider, prompt, InvestigationResult, system=SYSTEM_PROMPT)
+    result = call_with_schema(
+        provider, prompt, InvestigationResult, system=SYSTEM_PROMPT
+    )
     # Trust our own bookkeeping over a model echo mistake.
     result.threat_id = threat.threat_id
     result.skill_used = skill.name if skill else "generic"

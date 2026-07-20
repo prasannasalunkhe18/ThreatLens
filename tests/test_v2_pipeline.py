@@ -36,6 +36,8 @@ def test_finding_to_threat_carries_cwes():
     assert t.cwe_ids == ["CWE-89"]
     assert t.investigate is True
     assert "db.py:10" in t.description
+    assert t.name == "string-formatted SQL"
+    assert t.name != f.rule_id
 
 
 def test_threat_model_from_findings_summary():

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from threatlens.github_client import PullRequest
 from threatlens.models import ThreatModel
-from threatlens.providers.base import LLMProvider, llm_call
+from threatlens.providers.base import LLMProvider
+from threatlens.providers.chain import call_with_schema
 
 SYSTEM_PROMPT = """\
 You are a security-focused code reviewer performing Stage 1 threat modeling on a \
@@ -112,4 +113,4 @@ def run_threat_modeling(
     extra_context: str | None = None,
 ) -> ThreatModel:
     prompt = build_threat_model_prompt(pr, extra_context=extra_context)
-    return llm_call(provider, prompt, ThreatModel, system=SYSTEM_PROMPT)
+    return call_with_schema(provider, prompt, ThreatModel, system=SYSTEM_PROMPT)

@@ -44,11 +44,36 @@ def finding_to_threat(finding: Finding) -> Threat:
     desc = finding.message or finding.rule_id or "Semgrep finding"
     return Threat(
         threat_id=finding.finding_id,
-        name=finding.rule_id or "semgrep finding",
+        name=_humanize_finding_name(finding.rule_id, finding.message),
         description=f"{desc} [at {location}, severity={finding.severity or 'n/a'}]",
         cwe_ids=finding.cwe_ids,
         investigate=True,
     )
+
+
+def _humanize_finding_name(rule_id: str, message: str) -> str:
+    """Readable title for a scanner finding (not the dotted rule id).
+
+    Preference: short lead-in from the tool message, else the last rule-id
+    segment title-cased (e.g. ``hardcoded-jwt-secret`` → ``Hardcoded jwt secret``).
+    """
+    msg = (message or "").strip()
+    if msg:
+        for sep in (". ", ".\n", "\n"):
+            if sep in msg:
+                msg = msg.split(sep, 1)[0]
+                break
+        msg = msg.strip().rstrip(".")
+        if 8 <= len(msg) <= 90:
+            return msg
+
+    if rule_id:
+        # Semgrep often joins rules with ", "; take the first leaf segment.
+        leaf = rule_id.split(",")[0].strip().rstrip(".").split(".")[-1]
+        leaf = leaf.replace("-", " ").replace("_", " ").strip()
+        if leaf:
+            return leaf[:1].upper() + leaf[1:]
+    return rule_id or "Finding"
 
 
 def threat_model_from_findings(findings: list[Finding], discovery: str = "semgrep") -> ThreatModel:

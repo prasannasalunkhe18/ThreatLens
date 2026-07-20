@@ -98,114 +98,269 @@ def render_markdown(report: PipelineReport) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# HTML report
+# HTML report — summary cards + findings table (scanner-report layout)
 # --------------------------------------------------------------------------- #
 
 _HTML_STYLE = """\
 :root {
-  --bg: #fbfbfa; --panel: #ffffff; --ink: #1b1b1a; --muted: #6c6c68;
-  --line: #e3e2dd; --line-strong: #cfcec8;
-  --tp: #a4362f; --tp-bg: #fbf1f0; --fp: #4b6b52; --fp-bg: #f1f5f1;
-  --accent: #34506b; --code: #f4f3ef; --both: #2f4858; --both-bg: #eef2f4;
-  --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
-  --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --bg: #eef2f7; --panel: #ffffff; --ink: #1c1e21; --muted: #6b7280;
+  --line: #dde3ec; --line-strong: #c5ceda;
+  --tp: #c62828; --tp-soft: #fdecea; --tp-row: #fff5f5;
+  --fp: #1b7a4a; --fp-soft: #e8f5ee; --fp-row: #f3faf6;
+  --link: #1a56a8; --both: #1e3a5f; --both-soft: #e8eef5;
+  --err: #b45309; --err-soft: #fff7ed; --err-row: #fffbeb;
+  --accent: #3b5bdb; --accent-dark: #2f4ac0;
+  --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
 * { box-sizing: border-box; }
 body {
   margin: 0; background: var(--bg); color: var(--ink);
-  font-family: var(--sans); font-size: 14px; line-height: 1.5;
+  font-family: var(--sans); font-size: 14px; line-height: 1.45;
   -webkit-font-smoothing: antialiased;
 }
-.wrap { max-width: 960px; margin: 0 auto; padding: 32px 24px 80px; }
-a { color: var(--accent); text-decoration: none; }
+.page { max-width: 1180px; margin: 0 auto; padding: 24px 28px 72px; }
+a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
-code, .mono { font-family: var(--mono); }
+.mono { font-family: var(--mono); }
 
-header.rep { border-bottom: 1px solid var(--line-strong); padding-bottom: 16px; margin-bottom: 20px; }
-.brand { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
-h1.title { font-size: 20px; margin: 4px 0 8px; font-weight: 600; letter-spacing: -0.01em; }
-.meta { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px 18px; }
-.meta .mono { color: var(--ink); }
-
-.summary { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--line);
-  background: var(--panel); margin-bottom: 8px; }
-.stat { padding: 12px 18px; border-right: 1px solid var(--line); min-width: 92px; }
-.stat:last-child { border-right: 0; }
-.stat .n { font-family: var(--mono); font-size: 20px; font-weight: 600; }
-.stat .k { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-.stat.tp .n { color: var(--tp); }
-.stat.fp .n { color: var(--fp); }
-.pr-summary { color: var(--muted); font-size: 13px; margin: 14px 2px 22px; }
-
-.sec-label { font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
-  color: var(--muted); margin: 26px 2px 10px; }
-
-.finding { border: 1px solid var(--line); background: var(--panel); margin-bottom: -1px; }
-.finding[open] { border-color: var(--line-strong); }
-.finding > summary {
-  list-style: none; cursor: pointer; padding: 12px 14px; display: grid;
-  grid-template-columns: 34px 1fr auto; gap: 10px; align-items: center;
+.banner {
+  height: 4px; border-radius: 4px 4px 0 0; margin: 0 0 16px;
+  background: linear-gradient(90deg, var(--tp) 0 33%, var(--accent) 33% 66%, var(--fp) 66% 100%);
 }
+.topbar {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 8px 18px;
+  align-items: center; margin-bottom: 20px; font-size: 13px; color: var(--muted);
+  box-shadow: 0 1px 0 rgba(16,24,40,.04);
+}
+.topbar .brand {
+  color: #fff; background: var(--accent-dark); font-weight: 700;
+  padding: 3px 10px; border-radius: 4px; font-size: 12px; letter-spacing: .02em;
+}
+.topbar .sep { color: var(--line-strong); }
+.topbar .mono { font-size: 12px; color: #4b5563; }
+
+h1.title {
+  font-size: 22px; font-weight: 600; letter-spacing: -0.02em;
+  margin: 0 0 6px; line-height: 1.25;
+}
+.pr-summary { color: var(--muted); font-size: 13px; max-width: 72ch; margin: 0 0 22px; }
+
+.dash {
+  display: grid; grid-template-columns: auto 1fr; gap: 16px;
+  align-items: stretch; margin-bottom: 28px;
+}
+.totals {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 18px 28px; display: flex; gap: 36px; align-items: center;
+  min-width: 240px; box-shadow: 0 1px 2px rgba(16,24,40,.04);
+}
+.total .n {
+  font-size: 40px; font-weight: 700; letter-spacing: -0.03em; line-height: 1;
+  color: var(--ink);
+}
+.total.tp-total .n { color: var(--tp); }
+.total .k {
+  margin-top: 6px; font-size: 11px; font-weight: 600; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted);
+}
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+}
+.card {
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 14px 16px; min-height: 92px; display: flex; flex-direction: column;
+  justify-content: space-between; background: var(--panel);
+  box-shadow: 0 1px 2px rgba(16,24,40,.04);
+}
+.card .lab {
+  font-size: 11px; font-weight: 600; letter-spacing: .06em;
+  text-transform: uppercase; display: flex; align-items: center; gap: 6px;
+}
+.card .lab .swatch {
+  width: 10px; height: 10px; border-radius: 2px; display: inline-block;
+}
+.card .n { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; line-height: 1; }
+.card.tp { background: var(--tp-soft); border-color: #f5c6c2; border-top: 3px solid var(--tp); }
+.card.tp .lab { color: var(--tp); }
+.card.tp .swatch { background: var(--tp); }
+.card.tp .n { color: var(--tp); }
+.card.fp { background: var(--fp-soft); border-color: #bfe0cc; border-top: 3px solid var(--fp); }
+.card.fp .lab { color: var(--fp); }
+.card.fp .swatch { background: var(--fp); }
+.card.fp .n { color: var(--fp); }
+.card.both { background: var(--both-soft); border-color: #c5d3e3; border-top: 3px solid var(--both); }
+.card.both .lab { color: var(--both); }
+.card.both .swatch { background: var(--both); }
+.card.both .n { color: var(--both); }
+.card.err { background: var(--err-soft); border-color: #f0d3a8; border-top: 3px solid var(--err); }
+.card.err .lab { color: var(--err); }
+.card.err .swatch { background: var(--err); }
+.card.err .n { color: var(--err); }
+.card.usage { border-top: 3px solid #94a3b8; background: #f8fafc; }
+.card.usage .lab { color: var(--muted); }
+.card.usage .swatch { background: #94a3b8; }
+.card.usage .n { color: #334155; font-size: 22px; }
+
+.panel {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  overflow: hidden; box-shadow: 0 1px 2px rgba(16,24,40,.04);
+}
+.panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, #f8fafc, #fff);
+}
+.panel-head h2 {
+  margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em;
+}
+.panel-head .hint { color: var(--muted); font-size: 12px; font-weight: 400; margin-left: 8px; }
+.controls button {
+  font: inherit; font-size: 12px; font-weight: 500; color: #fff;
+  background: var(--accent); border: 1px solid var(--accent-dark); border-radius: 4px;
+  padding: 6px 12px; cursor: pointer;
+}
+.controls button:hover { background: var(--accent-dark); }
+
+.thead {
+  display: grid;
+  grid-template-columns: 118px minmax(180px, 1.6fr) 90px minmax(140px, 1.2fr) 110px minmax(100px, 1fr) 64px;
+  gap: 10px; padding: 10px 18px; background: #f1f5f9;
+  border-bottom: 1px solid var(--line); font-size: 11px; font-weight: 600;
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+.finding { border-bottom: 1px solid var(--line); }
+.finding:last-child { border-bottom: 0; }
+.finding.tp { background: var(--tp-row); }
+.finding.fp { background: var(--fp-row); }
+.finding.err { background: var(--err-row); }
+.finding > summary {
+  list-style: none; cursor: pointer; padding: 14px 18px;
+  display: grid;
+  grid-template-columns: 118px minmax(180px, 1.6fr) 90px minmax(140px, 1.2fr) 110px minmax(100px, 1fr) 64px;
+  gap: 10px; align-items: center;
+  border-left: 4px solid transparent;
+}
+.finding.tp > summary { border-left-color: var(--tp); }
+.finding.fp > summary { border-left-color: var(--fp); }
+.finding.err > summary { border-left-color: var(--err); }
 .finding > summary::-webkit-details-marker { display: none; }
-.finding > summary:hover { background: #fafaf8; }
-.fid { font-family: var(--mono); font-size: 12px; color: var(--muted); }
-.fmain { min-width: 0; }
-.frule { font-family: var(--mono); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.floc { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 2px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fright { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.finding > summary:hover { filter: brightness(0.985); }
 
-.tag { font-size: 11px; font-family: var(--mono); padding: 2px 7px; border: 1px solid var(--line-strong);
-  border-radius: 2px; color: var(--muted); background: #fff; }
-.tag.cwe { color: var(--ink); }
-.src { text-transform: none; }
-.src.semgrep { color: #5a4b7a; border-color: #d6cfe6; }
-.src.codeql { color: #2f5d50; border-color: #cbe0d8; }
-.src.both { color: #fff; background: var(--both); border-color: var(--both); font-weight: 600; }
-.verdict { font-weight: 600; letter-spacing: .02em; }
-.verdict.tp { color: var(--tp); }
-.verdict.fp { color: var(--fp); }
-.verdict.err { color: #8a6d1f; }
-.conf { font-family: var(--mono); font-size: 12px; color: var(--muted); }
-.lens { font-size: 11px; }
-.lens.skill { color: var(--accent); border-color: #c4d2df; }
+.vcell { display: flex; align-items: center; gap: 8px; }
+.vbadge {
+  width: 22px; height: 22px; border-radius: 3px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; color: #fff; letter-spacing: 0;
+}
+.vbadge.tp { background: var(--tp); }
+.vbadge.fp { background: var(--fp); }
+.vbadge.err { background: var(--err); }
+.vbadge.na { background: #9ca3af; }
+.vlabel { font-size: 12px; font-weight: 600; line-height: 1.2; }
+.vlabel.tp { color: var(--tp); }
+.vlabel.fp { color: var(--fp); }
+.vlabel.err { color: var(--err); }
+.vlabel.na { color: var(--muted); }
+
+.issue { min-width: 0; }
+.issue .name {
+  font-size: 13px; font-weight: 500; color: var(--link);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.issue .rule {
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+  margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cwes { font-family: var(--mono); font-size: 12px; color: #374151; }
+.loc {
+  font-family: var(--mono); font-size: 11px; color: #4b5563;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.src {
+  font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 3px;
+  display: inline-block; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.src.semgrep { color: #5b21b6; background: #f3e8ff; border: 1px solid #e9d5ff; }
+.src.codeql { color: #0f766e; background: #ccfbf1; border: 1px solid #99f6e4; }
+.src.both {
+  color: #fff; background: var(--both); border: 1px solid var(--both); font-weight: 600;
+}
+.lens {
+  font-size: 12px; color: #4b5563;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .lens.generic { color: var(--muted); font-style: italic; }
+.conf {
+  font-family: var(--mono); font-size: 12px; color: #4b5563; font-weight: 600;
+}
 
-.finding.tp { border-left: 3px solid var(--tp); }
-.finding.fp { border-left: 3px solid var(--fp); }
-.finding.err { border-left: 3px solid #caa53a; }
-.finding.uninvestigated { border-left: 3px solid var(--line-strong); }
-
-.body { padding: 4px 16px 18px 34px; border-top: 1px solid var(--line); }
-.desc { color: var(--muted); font-size: 13px; margin: 12px 0 16px; }
-.chain-label { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
-.chain { list-style: none; margin: 0; padding: 0; position: relative; }
-.chain::before { content: ""; position: absolute; left: 6px; top: 6px; bottom: 10px;
-  width: 1px; background: var(--line-strong); }
-.step { position: relative; padding: 4px 0 12px 24px; font-size: 13px; }
-.step::before { content: ""; position: absolute; left: 2px; top: 8px; width: 9px; height: 9px;
-  border-radius: 50%; background: #fff; border: 1px solid var(--line-strong); }
-.step.sink::before { border-color: var(--tp); }
+.body {
+  padding: 4px 18px 20px 146px; background: rgba(255,255,255,.55);
+  border-top: 1px solid var(--line);
+}
+.desc { color: #4b5563; font-size: 13px; margin: 12px 0 16px; max-width: 72ch; }
+.meta-row {
+  font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 16px;
+  margin-top: 10px;
+}
+.meta-row .mono { font-size: 11px; color: #4b5563; }
+.chain-label {
+  font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 10px;
+}
+.chain { list-style: none; margin: 0; padding: 0; position: relative; max-width: 72ch; }
+.chain::before {
+  content: ""; position: absolute; left: 5px; top: 8px; bottom: 12px;
+  width: 1px; background: var(--line-strong);
+}
+.step {
+  position: relative; padding: 2px 0 12px 22px;
+  font-size: 13px; color: #1f2937;
+}
+.step::before {
+  content: ""; position: absolute; left: 1px; top: 6px;
+  width: 9px; height: 9px; border-radius: 50%;
+  background: #fff; border: 1.5px solid var(--line-strong);
+}
+.step.sink::before { border-color: var(--tp); background: var(--tp-soft); }
 .step.verdict-step::before { background: var(--accent); border-color: var(--accent); }
-.step .lead { font-family: var(--mono); font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-.err-box { margin-top: 12px; padding: 10px 12px; background: #fdf7e8; border: 1px solid #e9d9a6;
-  font-family: var(--mono); font-size: 12px; color: #6b551c; }
+.step .lead {
+  font-size: 10px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .05em; margin-right: 4px;
+}
+.err-box {
+  margin: 10px 0; padding: 12px 14px; background: var(--err-soft);
+  border: 1px solid #f0d3a8; border-left: 4px solid var(--err); border-radius: 4px;
+  font-size: 13px; color: #7c4a03; max-width: 72ch;
+}
+.err-box .err-title { font-weight: 600; margin-bottom: 4px; color: var(--err); }
+.err-box .err-detail {
+  font-family: var(--mono); font-size: 11px; color: #92400e; opacity: .9;
+  white-space: pre-wrap; word-break: break-word;
+}
+.empty { padding: 28px 18px; color: var(--muted); font-size: 13px; }
 
-/* Signature interaction: staggered reveal of the trace when a finding opens. */
 .finding[open] .step {
-  animation: reveal .34s cubic-bezier(.22,.61,.36,1) both;
-  animation-delay: calc(var(--i) * 70ms);
+  animation: reveal .18s ease both;
+  animation-delay: calc(var(--i) * 45ms);
 }
 @keyframes reveal {
-  from { opacity: 0; transform: translateY(4px); }
+  from { opacity: 0; transform: translateY(3px); }
   to { opacity: 1; transform: none; }
 }
-footer.rep { margin-top: 28px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
-.controls { margin: 0 2px 6px; display: flex; justify-content: flex-end; }
-.controls button { font: inherit; font-size: 12px; color: var(--accent); background: none;
-  border: 1px solid var(--line-strong); border-radius: 2px; padding: 4px 10px; cursor: pointer; }
-.controls button:hover { background: #f2f5f7; }
-
+footer.rep {
+  margin-top: 20px; color: var(--muted); font-size: 12px; line-height: 1.5;
+}
+@media (max-width: 900px) {
+  .dash { grid-template-columns: 1fr; }
+  .thead { display: none; }
+  .finding > summary { grid-template-columns: 1fr; gap: 6px; }
+  .body { padding-left: 18px; }
+}
 @media (prefers-reduced-motion: reduce) {
   .finding[open] .step { animation: none; }
 }
@@ -239,11 +394,75 @@ def _step_class(i: int, total: int, text: str) -> str:
 
 
 def _step_lead(text: str) -> tuple[str, str]:
-    """Split a leading 'step N:' / 'label:' marker off for a mono lead-in."""
     head, sep, rest = text.partition(":")
     if sep and len(head) <= 32 and "\n" not in head:
         return head.strip(), rest.strip()
     return "", text.strip()
+
+
+def _looks_like_rule_id(s: str) -> bool:
+    if not s:
+        return False
+    return "/" in s or s.count(".") >= 2 or s.startswith(("javascript.", "python.", "java."))
+
+
+def _title_from_message(message: str) -> str:
+    msg = (message or "").strip()
+    if not msg:
+        return ""
+    for sep in (". ", ".\n", "\n"):
+        if sep in msg:
+            msg = msg.split(sep, 1)[0]
+            break
+    msg = msg.strip().rstrip(".")
+    return msg if 8 <= len(msg) <= 90 else ""
+
+
+def _title_from_rule_id(rule_id: str) -> str:
+    if not rule_id:
+        return ""
+    leaf = rule_id.split(",")[0].strip().rstrip(".").split(".")[-1]
+    leaf = leaf.replace("-", " ").replace("_", " ").strip()
+    return (leaf[:1].upper() + leaf[1:]) if leaf else ""
+
+
+def _human_label(
+    threat_name: str,
+    skill_used: str | None,
+    rule_id: str,
+    message: str = "",
+) -> str:
+    """Prefer a readable skill/message title over a raw scanner rule id."""
+    if skill_used and skill_used != "generic":
+        return skill_used
+    from_msg = _title_from_message(message)
+    if from_msg:
+        return from_msg
+    if threat_name and not _looks_like_rule_id(threat_name):
+        return threat_name
+    from_rule = _title_from_rule_id(rule_id or threat_name)
+    if from_rule:
+        return from_rule
+    return threat_name or rule_id or "Finding"
+
+
+def _friendly_error(err: str) -> tuple[str, str]:
+    """Short human reason + truncated detail for investigation failures."""
+    low = err.lower()
+    if "could not parse json" in low or "failed to parse response" in low:
+        title = "Model returned incomplete JSON (output truncated)"
+    elif "429" in err or "rate-limit" in low or "rate limit" in low:
+        title = "LLM rate-limited — retry later or switch models"
+    elif "413" in err or "too large" in low or "requested" in low and "limit" in low:
+        title = "Prompt too large for the fallback model"
+    elif "empty content" in low:
+        title = "Model returned empty content (hit token limit)"
+    elif "all llm providers failed" in low:
+        title = "All LLM providers failed (rate limits / size / empty)"
+    else:
+        title = "Investigation failed"
+    detail = err if len(err) <= 280 else err[:277] + "..."
+    return title, detail
 
 
 def render_html(report: PipelineReport) -> str:
@@ -254,34 +473,62 @@ def render_html(report: PipelineReport) -> str:
     tp = sum(1 for i in report.investigations if i.verdict == "TRUE_POSITIVE")
     fp = sum(1 for i in report.investigations if i.verdict == "FALSE_POSITIVE")
     n_err = len(report.errors)
+    both = sum(1 for f in report.findings if f.source and "+" in f.source)
+    n_findings = len(tm.threats)
 
-    # Source breakdown (semgrep / codeql / codeql+semgrep).
     src_counts: dict[str, int] = {}
     for f in report.findings:
         if f.source:
             src_counts[f.source] = src_counts.get(f.source, 0) + 1
 
-    def stat(n: object, k: str, cls: str = "") -> str:
-        return f'<div class="stat {cls}"><div class="n">{_esc(n)}</div><div class="k">{_esc(k)}</div></div>'
-
-    stats = [
-        stat(len(tm.threats), "findings"),
-        stat(tp, "true positive", "tp"),
-        stat(fp, "false positive", "fp"),
+    cards: list[str] = [
+        (
+            f'<div class="card tp"><div class="lab"><span class="swatch"></span>'
+            f'True positive</div><div class="n">{tp}</div></div>'
+        ),
+        (
+            f'<div class="card fp"><div class="lab"><span class="swatch"></span>'
+            f'False positive</div><div class="n">{fp}</div></div>'
+        ),
     ]
+    if both:
+        cards.append(
+            f'<div class="card both"><div class="lab"><span class="swatch"></span>'
+            f'Both confirmed</div><div class="n">{both}</div></div>'
+        )
     if n_err:
-        stats.append(stat(n_err, "errors"))
+        cards.append(
+            f'<div class="card err"><div class="lab"><span class="swatch"></span>'
+            f'Errors</div><div class="n">{n_err}</div></div>'
+        )
     if report.usage.calls:
-        stats.append(stat(report.usage.calls, "LLM calls"))
-        stats.append(stat(f"{report.usage.total_tokens:,}", "tokens"))
+        cards.append(
+            f'<div class="card usage"><div class="lab"><span class="swatch"></span>'
+            f'LLM calls</div><div class="n">{report.usage.calls}</div></div>'
+        )
+        cards.append(
+            f'<div class="card usage"><div class="lab"><span class="swatch"></span>'
+            f'Tokens</div><div class="n">{report.usage.total_tokens:,}</div></div>'
+        )
 
-    meta_bits = [f'<span>PR <a href="{_esc(report.pr_url)}">{_esc(report.pr_url)}</a></span>']
-    meta_bits.append(f'<span>discovery <span class="mono">{_esc(report.discovery)}</span></span>')
+    meta_bits = [
+        f'<span class="brand">ThreatLens</span>',
+        f'<span class="sep">|</span>',
+        f'<span>PR <a href="{_esc(report.pr_url)}">{_esc(report.pr_url)}</a></span>',
+        f'<span class="sep">·</span>',
+        f'<span>discovery <span class="mono">{_esc(report.discovery)}</span></span>',
+    ]
     if report.model_used:
-        meta_bits.append(f'<span>model <span class="mono">{_esc(report.model_used)}</span></span>')
+        meta_bits.append(f'<span class="sep">·</span>')
+        meta_bits.append(
+            f'<span>model <span class="mono">{_esc(report.model_used)}</span></span>'
+        )
     if src_counts:
         srcs = " · ".join(f"{k}×{v}" for k, v in sorted(src_counts.items()))
-        meta_bits.append(f'<span>sources <span class="mono">{_esc(srcs)}</span></span>')
+        meta_bits.append(f'<span class="sep">·</span>')
+        meta_bits.append(
+            f'<span>sources <span class="mono">{_esc(srcs)}</span></span>'
+        )
 
     rows: list[str] = []
     for t in tm.threats:
@@ -291,73 +538,132 @@ def render_html(report: PipelineReport) -> str:
 
         if inv is not None:
             state = "tp" if inv.verdict == "TRUE_POSITIVE" else "fp"
+            letter = "TP" if state == "tp" else "FP"
+            vtext = "True positive" if state == "tp" else "False positive"
         elif err is not None:
             state = "err"
+            letter = "!"
+            vtext = "Error"
         else:
-            state = "uninvestigated"
+            state = "na"
+            letter = "—"
+            vtext = "Pending"
 
-        title = (f.rule_id if f and f.rule_id else t.name) or t.threat_id
+        rule_id = (f.rule_id if f and f.rule_id else "") or ""
+        message = (f.message if f and f.message else "") or ""
+        skill = inv.skill_used if inv else report.skill_matches.get(t.threat_id)
+        primary = _human_label(t.name, skill, rule_id, message)
+        show_rule = bool(rule_id and rule_id != primary)
+
         loc = ""
         if f and f.file:
             loc = f"{f.file}:{f.line}" if f.line else f.file
-        cwe_tags = "".join(f'<span class="tag cwe">{_esc(c)}</span>' for c in t.cwe_ids)
+        cwe_txt = ", ".join(t.cwe_ids) if t.cwe_ids else "—"
 
-        src_tag = ""
         if f and f.source:
-            src_cls = "both" if "+" in f.source else f.source
-            label = "codeql+semgrep" if "+" in f.source else f.source
-            src_tag = f'<span class="tag src {_esc(src_cls)}" title="confirmed by both tools">{_esc(label)}</span>' if "+" in f.source else f'<span class="tag src {_esc(src_cls)}">{_esc(label)}</span>'
-
-        right: list[str] = []
-        if src_tag:
-            right.append(src_tag)
-        if inv is not None:
-            vcls = "tp" if inv.verdict == "TRUE_POSITIVE" else "fp"
-            right.append(f'<span class="verdict {vcls}">{_esc(inv.verdict)}</span>')
-            right.append(f'<span class="conf">{_esc(inv.confidence)}/10</span>')
-            lens_cls = "generic" if inv.skill_used == "generic" else "skill"
-            right.append(f'<span class="tag lens {lens_cls}">{_esc(inv.skill_used)}</span>')
-        elif err is not None:
-            right.append('<span class="verdict err">ERROR</span>')
+            if "+" in f.source:
+                src_html = (
+                    '<span class="src both" title="confirmed by both tools">'
+                    "both confirmed</span>"
+                )
+            else:
+                src_html = (
+                    f'<span class="src {_esc(f.source)}">{_esc(f.source)}</span>'
+                )
         else:
-            right.append('<span class="conf">not investigated</span>')
+            src_html = '<span class="src semgrep">—</span>'
 
-        # Body: description + reasoning chain (or error).
+        lens_raw = (inv.skill_used if inv else skill) or "—"
+        lens_cls = "generic" if lens_raw == "generic" else ""
+        conf_html = (
+            f'<span class="conf">{inv.confidence}/10</span>'
+            if inv is not None
+            else '<span class="conf">—</span>'
+        )
+
         body: list[str] = []
+        detail: list[str] = [
+            f'<span>id <span class="mono">{_esc(t.threat_id)}</span></span>'
+        ]
+        if rule_id:
+            detail.append(
+                f'<span>rule <span class="mono">{_esc(rule_id)}</span></span>'
+            )
+        if loc:
+            detail.append(
+                f'<span>at <span class="mono">{_esc(loc)}</span></span>'
+            )
+        body.append(f'<div class="meta-row">{"".join(detail)}</div>')
         if t.description:
             body.append(f'<div class="desc">{_esc(t.description)}</div>')
         if inv is not None and inv.reasoning_chain:
             body.append('<div class="chain-label">Reasoning trace</div>')
-            body.append("<ol class=\"chain\">")
+            body.append('<ol class="chain">')
             total = len(inv.reasoning_chain)
             for i, step in enumerate(inv.reasoning_chain):
                 lead, rest = _step_lead(step)
-                lead_html = f'<span class="lead">{_esc(lead)}</span> ' if lead else ""
+                lead_html = (
+                    f'<span class="lead">{_esc(lead)}</span> ' if lead else ""
+                )
                 body.append(
                     f'<li class="{_step_class(i, total, step)}" style="--i:{i}">'
-                    f'{lead_html}{_esc(rest)}</li>'
+                    f"{lead_html}{_esc(rest)}</li>"
                 )
             body.append("</ol>")
         if err is not None:
-            body.append(f'<div class="err-box">Investigation failed: {_esc(err)}</div>')
-        if not body:
-            body.append('<div class="desc">No further detail.</div>')
+            title, detail = _friendly_error(err)
+            body.append(
+                f'<div class="err-box"><div class="err-title">{_esc(title)}</div>'
+                f'<div class="err-detail">{_esc(detail)}</div></div>'
+            )
+
+        rule_line = (
+            f'<div class="rule" title="{_esc(rule_id)}">{_esc(rule_id)}</div>'
+            if show_rule
+            else ""
+        )
 
         rows.append(
             f'<details class="finding {state}">'
-            f'<summary>'
-            f'<span class="fid">{_esc(t.threat_id)}</span>'
-            f'<span class="fmain"><div class="frule">{_esc(title)}</div>'
-            f'<div class="floc">{_esc(loc)} {cwe_tags}</div></span>'
-            f'<span class="fright">{"".join(right)}</span>'
-            f'</summary>'
+            f"<summary>"
+            f'<span class="vcell">'
+            f'<span class="vbadge {state}" title="{_esc(inv.verdict if inv else vtext)}">'
+            f"{letter}</span>"
+            f'<span class="vlabel {state}">{vtext}</span>'
+            f"</span>"
+            f'<span class="issue">'
+            f'<div class="name">{_esc(primary)}</div>{rule_line}'
+            f"</span>"
+            f'<span class="cwes">{_esc(cwe_txt)}</span>'
+            f'<span class="loc" title="{_esc(loc)}">{_esc(loc) or "—"}</span>'
+            f"<span>{src_html}</span>"
+            f'<span class="lens {lens_cls}" title="{_esc(lens_raw)}">'
+            f"{_esc(lens_raw)}</span>"
+            f"{conf_html}"
+            f"</summary>"
             f'<div class="body">{"".join(body)}</div>'
-            f'</details>'
+            f"</details>"
         )
 
-    disc_label = (
-        "Threat model (LLM discovery)" if report.discovery == "llm"
-        else f"Findings ({report.discovery})"
+    section_title = (
+        "Threat model details"
+        if report.discovery == "llm"
+        else "Finding details"
+    )
+    disc_hint = (
+        "LLM discovery"
+        if report.discovery == "llm"
+        else f"discovery · {_esc(report.discovery)}"
+    )
+
+    table = (
+        f'<div class="thead">'
+        f"<span>Verdict</span><span>Finding</span><span>CWE</span>"
+        f"<span>Location</span><span>Source</span><span>Lens</span>"
+        f"<span>Conf</span></div>"
+        f'{"".join(rows)}'
+        if rows
+        else '<div class="empty">No findings identified.</div>'
     )
 
     return f"""<!doctype html>
@@ -366,27 +672,44 @@ def render_html(report: PipelineReport) -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ThreatLens — {_esc(report.pr_title.strip())}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>{_HTML_STYLE}</style>
 </head>
 <body>
-<div class="wrap">
-  <header class="rep">
-    <div class="brand">ThreatLens · PR triage report</div>
-    <h1 class="title">{_esc(report.pr_title.strip()) or "Untitled PR"}</h1>
-    <div class="meta">{"".join(meta_bits)}</div>
-  </header>
+<div class="page">
+  <div class="banner" aria-hidden="true"></div>
+  <div class="topbar">{"".join(meta_bits)}</div>
 
-  <div class="summary">{"".join(stats)}</div>
+  <h1 class="title">{_esc(report.pr_title.strip()) or "Untitled PR"}</h1>
   <div class="pr-summary">{_esc(tm.pr_summary)}</div>
 
-  <div class="sec-label">{_esc(disc_label)} · click a row to trace the verdict</div>
-  <div class="controls"><button id="toggle-all" type="button">Expand all</button></div>
-  {"".join(rows) if rows else '<div class="pr-summary">No findings identified.</div>'}
+  <div class="dash">
+    <div class="totals">
+      <div class="total">
+        <div class="n">{n_findings}</div>
+        <div class="k">Total findings</div>
+      </div>
+      <div class="total tp-total">
+        <div class="n">{tp}</div>
+        <div class="k">True positives</div>
+      </div>
+    </div>
+    <div class="cards">{"".join(cards)}</div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>{section_title}<span class="hint">{disc_hint} · expand a row to trace</span></h2>
+      <div class="controls"><button id="toggle-all" type="button">Expand all</button></div>
+    </div>
+    {table}
+  </div>
 
   <footer class="rep">
-    Generated by ThreatLens. Discovery via static analysis (Semgrep / CodeQL);
-    verdicts via per-finding LLM investigation. Every finding is investigated with a
-    matched skill or the generic lens — none dropped.
+    Generated by ThreatLens. Static analysis discovers candidates; the LLM verifies
+    each one. Dual-confirmed findings (Semgrep + CodeQL) are higher confidence.
   </footer>
 </div>
 <script>{_HTML_SCRIPT}</script>

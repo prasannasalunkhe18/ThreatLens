@@ -40,21 +40,26 @@ def _report() -> PipelineReport:
     )
 
 
-def test_render_html_is_selfcontained_and_covers_states():
+def test_render_html_dashboard_layout_and_states():
     html = render_html(_report())
     assert html.startswith("<!doctype html>")
-    # self-contained: styles + script inlined, no external asset links
     assert "<style>" in html and "<script>" in html
-    assert "<link" not in html and "src=" not in html
-    # both-confirmed source rendered as higher-confidence tag
-    assert "tag src both" in html and "codeql+semgrep" in html
-    # verdicts + lenses
-    assert "verdict tp" in html and "verdict fp" in html
-    assert "lens skill" in html and "lens generic" in html
-    # reasoning trace + staggered reveal hooks + reduced-motion guard
-    assert "--i:" in html
-    assert "prefers-reduced-motion" in html
-    # usage strip
+    assert "fonts.googleapis.com" in html
+    assert 'src="' not in html
+    # Snyk-style summary: large totals + colored cards
+    assert "Total findings" in html and "True positives" in html
+    assert 'class="card tp"' in html and 'class="card fp"' in html
+    assert 'class="card both"' in html and "Both confirmed" in html
+    assert 'class="card usage"' in html
+    # Findings table headers + TP/FP letter badges
+    assert "Finding details" in html
+    assert "Verdict" in html and "Location" in html and "Lens" in html
+    assert "vbadge tp" in html and "vbadge fp" in html
+    assert "True positive" in html and "False positive" in html
+    assert "both confirmed" in html and "src both" in html
+    # Human label promoted; reasoning trace kept
+    assert "Server-Side Request Forgery" in html
+    assert "--i:" in html and "prefers-reduced-motion" in html
     assert "1,234" in html or "1234" in html
 
 
@@ -63,8 +68,7 @@ def test_render_html_handles_llm_mode_without_findings():
     r.discovery = "llm"
     r.findings = []
     html = render_html(r)
-    assert "Threat model (LLM discovery)" in html
-    # no source tags when findings absent, but rows still render from threats
+    assert "Threat model details" in html
     assert "F1" in html and "F2" in html
 
 

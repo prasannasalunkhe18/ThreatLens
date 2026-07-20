@@ -332,3 +332,34 @@ serves the full report (200), 404s unknown paths. 46 tests green.
 reachability on each finding; plus defensible design decisions, validation,
 honest limitations, and a 60-second pitch). Kept Mermaid edge syntax to the
 pipe-label form that already renders in this repo.
+
+---
+
+## 2026-07-20 — Session 9 (Report UI visual redesign)
+**Worked on:** Hierarchy/spacing redesign of the HTML report so it stops reading
+as a wall of equal-weight monospace.
+
+**What changed and why:**
+- **Typefaces split by role.** Space Grotesk (display) for title / labels / stat
+  numbers / human finding titles; Inter for body/meta; monospace *only* for
+  rule ids, paths, and CWEs. That was the main fix for the flat look.
+- **Verdict first.** Filled pills ("True positive" / "False positive") instead of
+  plain colored text; dropped the thin left-edge bars that were easy to miss.
+- **Human label over rule id.** Row primary text is the skill name (or readable
+  threat name); the raw scanner rule id is muted secondary text, with the full
+  id repeated in the expanded detail.
+- **Confidence as a bar**, not equal-weight text next to the verdict.
+- **Source priority.** Dual-confirmed findings show a filled "both confirmed"
+  badge; single-source stays an outlined quiet tag.
+- **Spacing.** Gapped rounded rows; security stats vs usage stats in separate
+  groups (usage gets a muted tint so tokens don't compete with TP/FP counts).
+- Motion kept subtle (~180ms step reveal; `prefers-reduced-motion` respected).
+
+**State:** HTML unit tests updated for the new markup; sample report re-rendered.
+
+**Follow-up — Snyk-style report layout:** rebuilt the HTML template after a
+scanner-dashboard reference (summary totals + colored severity-style cards +
+columnar finding table). Adapted to ThreatLens vocabulary (TP/FP/both-confirmed
+instead of Critical/High/Medium/Low). No sidebar/app chrome — still a single
+static report. Verdict letter badges (TP/FP), blue finding names, CWE/location/
+source/lens/conf columns, expand-for-trace. Tests updated.

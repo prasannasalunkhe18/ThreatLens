@@ -83,6 +83,46 @@ class FallbackLLMProvider(LLMProvider):
             retryable=False,
         )
 
+    def call_schema(
+        self,
+        prompt: str,
+        schema: type[T],
+        *,
+        system: str | None = None,
+    ) -> T:
+        """Complete + parse, advancing to the next model on parse/validation failure.
+
+        Truncated free-model JSON is common; treating parse errors as retryable
+        (instead of only network failures) recovers many investigations.
+        """
+        from pydantic import ValidationError
+
+        from threatlens.providers.base import extract_json
+
+        errors: list[str] = []
+        for provider in self.providers:
+            try:
+                raw = provider.complete(prompt, system=system)
+                self.last_provider_name = provider.name
+                usage = provider.last_usage()
+                if usage is not None:
+                    self.tracker.record(
+                        provider.name,
+                        prompt_tokens=usage.prompt_tokens,
+                        completion_tokens=usage.completion_tokens,
+                        total_tokens=usage.total_tokens,
+                    )
+                data = extract_json(raw)
+                return schema.model_validate(data)
+            except (LLMError, ValidationError, ValueError) as exc:
+                errors.append(f"{provider.name}: {exc}")
+                continue
+
+        raise LLMError(
+            "All LLM providers failed:\n  - " + "\n  - ".join(errors),
+            retryable=False,
+        )
+
 
 def call_with_schema(
     provider: LLMProvider,
@@ -91,4 +131,6 @@ def call_with_schema(
     *,
     system: str | None = None,
 ) -> T:
+    if isinstance(provider, FallbackLLMProvider):
+        return provider.call_schema(prompt, schema, system=system)
     return llm_call(provider, prompt, schema, system=system)
