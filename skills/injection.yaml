@@ -1,0 +1,36 @@
+name: Injection (data/code confusion)
+cwe_ids: ["CWE-89", "CWE-78", "CWE-79", "CWE-77", "CWE-94", "CWE-95", "CWE-1336", "CWE-943"]
+reachability: >
+  Reachable when attacker-influenced data crosses into an interpreter (SQL/NoSQL
+  engine, OS shell, HTML/JS renderer, template engine, or a language eval) as
+  structure rather than pure data, without a control that re-establishes the
+  data/code boundary for that interpreter's context.
+source_definition: >
+  Any value an attacker can influence: request parameters, headers, cookies,
+  request bodies, uploaded content, or previously stored data that originated
+  from an attacker. The programming language does not matter — only whether the
+  value's provenance is untrusted.
+sink_definition: >
+  Any point where a value is handed to an interpreter as part of its
+  instruction stream: query execution, OS/command execution, template or markup
+  rendering, or dynamic code evaluation. The dangerous property is that data is
+  parsed as code/structure.
+mitigation_patterns:
+  - Structural separation of data from code (bind parameters / prepared statements) so input can never change query or command structure.
+  - Argument-vector execution instead of a shell interpreter, so input is a literal argument, never tokenized as a command.
+  - Context-correct output encoding at the exact sink context (HTML body vs attribute vs JS vs URL) applied automatically by the framework.
+  - Strict input allowlisting where only a closed set of safe values is accepted.
+  - Not passing untrusted data to any dynamic-evaluation construct at all.
+mitigation_examples_by_ecosystem:
+  sql: "parameterized queries / ORM bound params (e.g. placeholders + args) instead of string building"
+  shell: "pass args as a list to an exec API rather than a shell string"
+  web_output: "framework auto-escaping / avoid raw-HTML sinks"
+  templating: "render data through the engine's escaped interpolation, never eval of user text"
+checklist:
+  - Identify the exact untrusted source feeding this location and confirm an attacker can influence it.
+  - Trace the value hop-by-hop to the interpreter sink, naming each function it passes through.
+  - Determine whether the value can alter the STRUCTURE of the query/command/markup/code, or is confined to a data slot.
+  - Check for a boundary-restoring control on THIS path (structural separation, arg-vector exec, context-correct encoding, or allowlist) and classify it strong, weak, or absent.
+  - If a control exists, ask whether it matches the sink's interpreter context (e.g. HTML-escaping does not protect a JS context).
+  - Confirm the path is actually reachable (route registered, not dead code, input not already neutralized upstream).
+  - Verdict - TRUE_POSITIVE if untrusted data reaches the interpreter as structure with no adequate boundary control; FALSE_POSITIVE if separated, correctly encoded, allowlisted, or unreachable.

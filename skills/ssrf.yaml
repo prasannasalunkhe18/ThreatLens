@@ -1,0 +1,31 @@
+name: Server-Side Request Forgery
+cwe_ids: ["CWE-918", "CWE-611"]
+reachability: >
+  Reachable when an attacker can influence the destination (scheme, host, port,
+  or path) of a request the server itself initiates, and the destination is not
+  constrained to a trusted set at the moment the request is made.
+source_definition: >
+  Any attacker-influenced value that becomes part of an outbound request target:
+  a full URL, a hostname, a path fragment, or a redirect location. Untrusted
+  because the client chooses it.
+sink_definition: >
+  The point where the server initiates an outbound request (HTTP fetch, file/URL
+  retrieval, XML entity resolution, webhook delivery). The dangerous property is
+  the server reaching a destination the attacker selected.
+mitigation_patterns:
+  - Constrain the destination to a server-controlled allowlist of hosts/schemes validated at request time.
+  - Resolve and re-validate the final destination AFTER DNS resolution and AFTER any redirects (avoid time-of-check/time-of-use gaps).
+  - Block access to internal/link-local/loopback and cloud-metadata ranges, accounting for encoding tricks.
+  - Disable or tightly restrict redirect following when the target is untrusted.
+  - "Treat a denylist of bad IPs as weak on its own: enumerate bypasses (redirects, DNS rebinding, IPv4-mapped IPv6, decimal/octal/hex IP encodings, trailing-dot hosts, parser-vs-fetcher disagreement) before trusting it."
+mitigation_examples_by_ecosystem:
+  http_client: "allowlist host check before fetch; disable auto-redirects for untrusted URLs"
+  xml: "disable external entity/DTD resolution"
+  cloud: "block 169.254.169.254 and internal ranges post-resolution"
+checklist:
+  - Identify the outbound request sink and which parts of the destination the attacker controls (whole URL, host, path).
+  - Determine whether validation exists before the request and classify it - allowlist (strong), scheme-only (weak), denylist (weak, list bypasses), or absent.
+  - Check for time-of-check/time-of-use gaps - is DNS resolved or are redirects followed AFTER the safety check?
+  - Assess what the attacker can reach - internal services, cloud metadata, loopback ports - versus a hard-pinned single host.
+  - Note whether the response is returned to the attacker (full-read) or only side effects (blind) - affects severity, not the verdict.
+  - Verdict - TRUE_POSITIVE if attacker input influences the destination and validation is absent or bypassable at request time; FALSE_POSITIVE if the destination is hard-pinned or allowlisted when the request is made.

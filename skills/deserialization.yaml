@@ -1,0 +1,32 @@
+name: Insecure Deserialization
+cwe_ids: ["CWE-502"]
+reachability: >
+  Reachable when attacker-influenced bytes are handed to a deserializer capable
+  of instantiating arbitrary types or invoking code during reconstruction,
+  without a prior integrity check that proves the bytes came from a trusted
+  producer.
+source_definition: >
+  Any attacker-influenced serialized blob: request body, cookie, header,
+  uploaded file, queue message, or cache/DB entry an attacker can write.
+  Untrusted because its origin is not cryptographically established.
+sink_definition: >
+  A deserialization/parse operation whose format can carry type or behavior, not
+  just data (object graphs, class hints, callbacks). The dangerous property is
+  reconstruction that can create arbitrary types or run code.
+mitigation_patterns:
+  - Use a data-only format (structured data without type/behavior directives) for untrusted input.
+  - Use the safe/restricted parsing mode of the deserializer when one exists.
+  - Constrain reconstructable types to an explicit allowlist.
+  - Verify integrity (e.g. a validated signature) BEFORE deserializing, so only trusted-producer bytes are ever parsed.
+mitigation_examples_by_ecosystem:
+  python: "prefer json over pickle; yaml.safe_load not full load"
+  java: "avoid native object streams for untrusted input; apply a class allowlist filter"
+  general: "HMAC-verify the blob before parsing; reject on mismatch"
+checklist:
+  - Identify the deserialization sink and classify the format's power - can it carry types/behavior (code-capable) or is it data-only?
+  - Identify where the bytes come from and confirm an attacker can influence them.
+  - Check whether integrity is verified BEFORE deserialization (signature after parsing does not count).
+  - Check for a type allowlist or a safe/restricted parsing mode on this path.
+  - Look in the diff for downgrades - a switch from data-only to code-capable parsing, or a new endpoint that parses untrusted blobs.
+  - Note that specific gadget availability is not required for the verdict - arbitrary-type reconstruction of untrusted bytes is itself the vulnerability.
+  - Verdict - TRUE_POSITIVE if untrusted bytes reach a code-capable deserializer without prior integrity verification; FALSE_POSITIVE if data-only, safe mode, allowlisted, or integrity-checked first.

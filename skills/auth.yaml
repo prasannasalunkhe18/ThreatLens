@@ -1,0 +1,34 @@
+name: Authentication / Access-Control Gaps
+cwe_ids: ["CWE-287", "CWE-306", "CWE-862", "CWE-863", "CWE-639"]
+reachability: >
+  Reachable when a state-changing or data-revealing operation can be invoked
+  without a verified identity, or when the identity/authorization decision
+  relies on attacker-controllable material (a forgeable token, a client-supplied
+  identity field, a predictable secret) rather than a server-verified fact.
+source_definition: >
+  The claimed identity or authorization input on a request: session token, auth
+  header, cookie, or any request field that names the acting user/role/object
+  id. Untrusted precisely because the client supplies it.
+sink_definition: >
+  The point where the system grants access or performs a privileged action —
+  the handler body behind an endpoint, or the branch taken after an
+  authn/authz decision. The dangerous property is acting on an unverified or
+  attacker-chosen identity.
+mitigation_patterns:
+  - Enforce a verified authentication check on the actual code path before the privileged action (not merely assumed to exist globally).
+  - Derive the acting principal from server-verified state (validated session/token), never from a client-supplied identity field.
+  - Verify token integrity properly (signature checked, algorithm pinned) before trusting any claim inside it.
+  - Perform per-object authorization (does THIS principal own/‑may‑access THIS resource) not just "is logged in".
+  - Hold secondary channels (reset, magic link, API key, webhook) to the same verification standard as the primary login.
+mitigation_examples_by_ecosystem:
+  web_framework: "auth middleware/guard/decorator applied to the route, verified at registration"
+  tokens: "verify signature with a pinned algorithm; reject alg=none and decode-without-verify"
+  object_access: "ownership/ACL check keyed on the authenticated principal"
+checklist:
+  - Identify the operation's sensitivity and what identity/authorization input the request carries.
+  - Determine whether a verified auth check runs on THIS path before the action, and confirm it at the point of enforcement rather than by convention.
+  - Check whether the acting principal comes from server-verified state or from a client-supplied field.
+  - If a token is involved, confirm its integrity is actually verified before any claim is trusted.
+  - For resource access, check for a per-object authorization decision, not just presence of a session.
+  - Look for logic inversions, swallowed auth errors, or debug/test bypasses on this path.
+  - Verdict - TRUE_POSITIVE if the action is reachable without a verified identity or with an attacker-chosen one; FALSE_POSITIVE if a real verified check gates this exact path.

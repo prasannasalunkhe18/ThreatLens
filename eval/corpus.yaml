@@ -1,0 +1,96 @@
+# Stage 1 live-tuning corpus
+# expect.intent: INTRODUCES_OR_WORSENS | REMEDIATES | NOISE
+# expect.must_mention_cwes: CWEs that should appear if threats are non-empty
+# expect.max_investigate: soft cap on investigate=true (noise should be 0)
+# expect.notes: human rubric for judging quality
+
+prs:
+  - id: js655
+    url: https://github.com/juice-shop/juice-shop/pull/655
+    expect:
+      intent: INTRODUCES_OR_WORSENS
+      must_mention_cwes: ["CWE-918", "CWE-94"]
+      min_investigate: 1
+      max_investigate: 5
+      notes: "Intentional SSTI (eval/pug) + SSRF profile bugs — must flag sinks, not just challenge YAML."
+
+  - id: dokku8848
+    url: https://github.com/dokku/dokku/pull/8848
+    expect:
+      intent: REMEDIATES
+      must_mention_cwes: ["CWE-78"]
+      min_investigate: 0
+      max_investigate: 1
+      notes: "Removes eval on docker args — remediate; investigate only if residual shell eval remains."
+
+  - id: grafana1563
+    url: https://github.com/grafana/docker-otel-lgtm/pull/1563
+    expect:
+      intent: REMEDIATES
+      must_mention_cwes: ["CWE-78"]
+      min_investigate: 0
+      max_investigate: 1
+      notes: "Command-injection fix — record class, prefer investigate=false if fix looks complete."
+
+  - id: sql2
+    url: https://github.com/franktomasello/ai-assisted-dev-security-demo/pull/2
+    expect:
+      intent: REMEDIATES
+      must_mention_cwes: ["CWE-89"]
+      min_investigate: 0
+      max_investigate: 0
+      notes: "f-string SQL -> parameterized; complete fix + tests → threats ok but investigate=false."
+
+  - id: ssrf167
+    url: https://github.com/Lamisi/Bricks/pull/167
+    expect:
+      intent: REMEDIATES
+      must_mention_cwes: ["CWE-918"]
+      min_investigate: 0
+      max_investigate: 1
+      notes: "SSRF denylist bypass fixes (IPv4-mapped IPv6) — remediate."
+
+  - id: path510
+    url: https://github.com/tinyhttp/tinyhttp/pull/510
+    expect:
+      intent: REMEDIATES
+      must_mention_cwes: ["CWE-22"]
+      min_investigate: 0
+      max_investigate: 1
+      notes: "Path traversal sendfile fix."
+
+  - id: webgoat2431
+    url: https://github.com/WebGoat/WebGoat/pull/2431
+    expect:
+      intent: INTRODUCES_OR_WORSENS
+      must_mention_cwes: []
+      min_investigate: 0
+      max_investigate: 3
+      notes: "JWT lesson upgrades — flag only real new sinks/weaknesses in lesson code, not lesson prose."
+
+  - id: webgoat2422
+    url: https://github.com/WebGoat/WebGoat/pull/2422
+    expect:
+      intent: REMEDIATES
+      must_mention_cwes: []
+      min_investigate: 0
+      max_investigate: 2
+      notes: "Password-reset host-header lesson bugfix — Host header / password reset surface."
+
+  - id: multer704
+    url: https://github.com/juice-shop/juice-shop/pull/704
+    expect:
+      intent: NOISE
+      must_mention_cwes: []
+      min_investigate: 0
+      max_investigate: 0
+      notes: "multer version bump only — threats should be empty or investigate=false only."
+
+  - id: flask5798
+    url: https://github.com/pallets/flask/pull/5798
+    expect:
+      intent: NOISE
+      must_mention_cwes: []
+      min_investigate: 0
+      max_investigate: 0
+      notes: "Docs-only TRUSTED_HOSTS — threats=[]."

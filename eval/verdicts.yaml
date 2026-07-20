@@ -1,0 +1,50 @@
+# Labeled ground-truth set for the v2 pipeline (Semgrep discovery + LLM verify).
+#
+# Semgrep scans the PR's HEAD (final) state, so a remediation PR that fixed its
+# issue surfaces no finding -> no investigation -> no false alarm. An
+# intentionally-vulnerable PR surfaces real sinks that should verify as TPs.
+#
+# expect.min_true_positives / max_true_positives: bounds on TRUE_POSITIVE verdicts
+# expect.tp_cwes: CWEs that MUST appear among the true positives (recall check)
+#   (CWE-94 alias set also accepts CWE-95 / CWE-1336 for eval/template injection)
+
+prs:
+  - id: js655
+    url: https://github.com/juice-shop/juice-shop/pull/655
+    expect:
+      min_true_positives: 2
+      max_true_positives: 99
+      tp_cwes: ["CWE-94", "CWE-918"]
+      notes: "Intentionally planted SSTI (eval) + SSRF. Semgrep also surfaces other real Juice Shop issues (JWT, CSRF); the planted two must verify TRUE_POSITIVE."
+
+  - id: sql2
+    url: https://github.com/franktomasello/ai-assisted-dev-security-demo/pull/2
+    expect:
+      min_true_positives: 0
+      max_true_positives: 0
+      tp_cwes: []
+      notes: "SQLi fixed (parameterized). Semgrep finds 0 on head -> 0 TP, 0 LLM calls."
+
+  - id: ssrf167
+    url: https://github.com/Lamisi/Bricks/pull/167
+    expect:
+      min_true_positives: 0
+      max_true_positives: 0
+      tp_cwes: []
+      notes: "SSRF denylist hardening. Semgrep finds 0 on head -> 0 TP."
+
+  - id: path510
+    url: https://github.com/tinyhttp/tinyhttp/pull/510
+    expect:
+      min_true_positives: 0
+      max_true_positives: 0
+      tp_cwes: []
+      notes: "Path traversal fix. Semgrep finds 0 on head -> 0 TP."
+
+  - id: multer704
+    url: https://github.com/juice-shop/juice-shop/pull/704
+    expect:
+      min_true_positives: 0
+      max_true_positives: 0
+      tp_cwes: []
+      notes: "Dependency bump (package.json only, non-scannable) -> 0 findings -> 0 TP."

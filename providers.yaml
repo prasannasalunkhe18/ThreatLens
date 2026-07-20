@@ -1,0 +1,11 @@
+providers:
+  - name: openrouter
+    models:
+      - nvidia/nemotron-3-super-120b-a12b:free
+      - openai/gpt-oss-20b:free
+      - google/gemma-4-31b-it:free
+      - tencent/hy3:free
+  - name: groq
+    models:
+      - llama-3.3-70b-versatile
+default_provider: openrouter
