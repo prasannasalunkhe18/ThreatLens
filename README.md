@@ -1,10 +1,14 @@
 # ThreatLens
 
-PR vulnerability triage agent (**v2 — scanner-driven discovery + LLM verification**).
-Given a GitHub PR URL, ThreatLens:
+PR / repo vulnerability triage agent (**v2 — scanner-driven discovery + LLM verification**).
+Given a GitHub PR URL (or a bare repo URL), ThreatLens:
 
-1. **Discovery — Semgrep:** a static analyzer scans the PR's changed files and
-   emits CWE-tagged findings. Deterministic, broad, free, no API key.
+1. **Discovery — static analysis:** scan the PR's changed files (or the repo's
+   default branch) and emit CWE-tagged findings. No LLM, no API key.
+   - **Semgrep** (default) — pattern rules; broad and fast
+   - **CodeQL** (`--discovery codeql`) — dataflow / taint analysis
+   - **Both** (`--discovery both`) — run Semgrep + CodeQL, fuse and de-dup;
+     findings both tools agree on are marked `codeql+semgrep`
 2. **Investigation — LLM:** for each finding, apply the matched CWE skill (or a
    generic fallback) and trace source→sink to produce a TRUE_POSITIVE /
    FALSE_POSITIVE verdict with confidence and a reasoning chain. This is the
@@ -21,10 +25,10 @@ finds candidates; the LLM only verifies them.**
 
 ```mermaid
 flowchart TB
-    PR[PR URL]
+    PR[PR or repo URL]
 
     subgraph ingest [Ingest]
-        GH["GitHub Client<br/>diff · changed files · commits<br/>fork-aware fetch @ head SHA"]
+        GH["GitHub Client<br/>PR files or default-branch tree<br/>fork-aware fetch @ head SHA"]
     end
 
     subgraph discovery ["Discovery — static analysis, no LLM"]
@@ -78,14 +82,14 @@ finding gets a verdict:** a registry miss falls back to the generic lens
 
 ```mermaid
 flowchart LR
-    A[PR URL] --> B[Fetch PR]
+    A[PR or repo URL] --> B[Fetch target]
     B --> C[Scan<br/>Semgrep / CodeQL]
     C --> D[Investigate each finding<br/>skill or generic]
     D --> E[Report<br/>json / md / html / --serve]
 ```
 
-A clean PR (no findings) stops after the scan — zero LLM calls. Each finding is
-investigated independently, so one failure doesn't sink the run.
+A clean target (no findings) stops after the scan — zero LLM calls. Each finding
+is investigated independently, so one failure doesn't sink the run.
 
 ## Confidence heuristic
 
@@ -177,18 +181,20 @@ against a labeled set."
 ```bash
 python -m venv .venv
 .venv\Scripts\activate          # Windows
+# source .venv/bin/activate     # macOS / Linux
 pip install -e ".[dev]"
 copy .env.example .env          # then fill in keys
 ```
 
-**Discovery engines** (both free, no API key):
+**Discovery engines** (both free, no LLM API key):
 
-- **Semgrep** — the runner auto-detects a backend:
+- **Semgrep** (default discovery) — the runner auto-detects a backend:
   - *Linux / macOS / WSL:* `pip install semgrep` (local binary on PATH).
-  - *Windows:* Semgrep has no native binary; install **Docker Desktop** and the
-    runner uses the official `semgrep/semgrep` image automatically
-    (`docker pull semgrep/semgrep`).
-- **CodeQL** (optional, for `--discovery=codeql|both`) — one-time bundle setup:
+  - *Windows:* Semgrep has no native binary; **Docker Desktop must be running**
+    for default / `both` scans. The runner uses the official `semgrep/semgrep`
+    image automatically (`docker pull semgrep/semgrep`).
+- **CodeQL** (optional, for `--discovery codeql` or `both`) — one-time bundle
+  setup; does **not** need Docker:
   ```bash
   python scripts/setup_codeql.py        # downloads + extracts ~670 MB into .codeql/
   ```
@@ -220,24 +226,31 @@ commands for any target.
 2. **Add API keys** — copy `.env.example` to `.env` and paste:
    - `GITHUB_TOKEN` — [GitHub → Settings → Developer settings → Personal access tokens](https://github.com/settings/tokens) (read-only is enough)
    - `OPENROUTER_API_KEY` and/or `GROQ_API_KEY` — free LLM keys for the investigation step
-3. **Start Docker Desktop** (Windows users — Semgrep runs in Docker). On macOS/Linux you can `pip install semgrep` instead.
-4. **(Optional) Install CodeQL** — only if you want `--discovery both` or `codeql`:
+3. **Semgrep backend** — Windows: start **Docker Desktop** before any scan that
+   uses Semgrep (default or `--discovery both`). macOS/Linux: `pip install semgrep`
+   instead (no Docker). CodeQL-only scans (`--discovery codeql`) do not need Docker.
+4. **(Optional) Install CodeQL** — needed for `--discovery codeql` or `both`:
    ```bash
    python scripts/setup_codeql.py
    ```
 5. **Run a scan** — pick one:
 
-   **A. Simple scan (Semgrep + LLM), open the report in your browser**
+   **A. Default: Semgrep discovery + LLM, open the report in your browser**
    ```bash
    threatlens pr analyze https://github.com/juice-shop/juice-shop/pull/655 --serve
    ```
 
-   **B. Stronger discovery (Semgrep + CodeQL fused) + browser report**
+   **B. CodeQL-only discovery + LLM**
+   ```bash
+   threatlens pr analyze https://github.com/juice-shop/juice-shop/pull/655 --discovery codeql --serve
+   ```
+
+   **C. Strongest discovery: Semgrep + CodeQL fused + LLM**
    ```bash
    threatlens pr analyze https://github.com/juice-shop/juice-shop/pull/655 --discovery both --serve
    ```
 
-   **C. Scan a whole repo’s default branch** (no PR number needed)
+   **D. Scan a whole repo’s default branch** (no PR number needed)
    ```bash
    threatlens pr analyze https://github.com/vulnerable-apps/damn-vulnerable-MCP-server --serve
    ```
@@ -250,14 +263,15 @@ commands for any target.
 
 | Flag | Plain English |
 |------|----------------|
-| *(none)* | Semgrep finds candidates; LLM says true/false positive |
+| *(none)* / `--discovery semgrep` | Semgrep finds candidates; LLM says true/false positive |
+| `--discovery codeql` | CodeQL dataflow/taint only (no Docker) |
 | `--discovery both` | Semgrep **and** CodeQL; agreement is marked higher confidence |
 | `--serve` | Host the HTML report locally and open it in the browser |
 | `--stage1-only` | Scan only — skip LLM investigation (faster, no verdicts) |
 | `--pr 3` | When you pass a repo URL, analyze PR `#3` instead of the default branch |
 
-Tip: first runs can take a few minutes (Docker image pull, CodeQL, LLM calls).
-Later runs on the same machine are faster.
+Tip: first runs can take a few minutes (Docker image pull, CodeQL download, LLM
+calls). Later runs on the same machine are faster.
 
 ## Usage
 
@@ -315,9 +329,10 @@ threatlens pr analyze <PR_URL> --serve --port 8080 --no-browser
 threatlens report serve report.json
 ```
 
-Semgrep surfaces CWE-tagged findings in the PR's changed files; each finding is
-then traced by the LLM (matched skill or generic fallback) and ruled
-TRUE_POSITIVE / FALSE_POSITIVE with a confidence score and reasoning chain.
+Discovery (Semgrep and/or CodeQL) surfaces CWE-tagged findings in the PR's
+changed files or the repo default branch; each finding is then traced by the LLM
+(matched skill or generic fallback) and ruled TRUE_POSITIVE / FALSE_POSITIVE with
+a confidence score and reasoning chain.
 
 ## Skills (principle-based)
 
@@ -342,7 +357,7 @@ python scripts/run_skill_vs_generic.py  # skill-vs-generic accuracy comparison
 
 ```
 src/threatlens/
-  github_client.py      # PR fetch (diff, files, commits); fork-aware head fetch
+  github_client.py      # PR fetch + default-branch repo scan; fork-aware head fetch
   models.py             # Finding, Threat, ThreatModel, InvestigationResult, Skill
   discovery/            # semgrep_scan + codeql_scan + fuse -> Finding[]
   providers/            # OpenRouter + Groq + fallback chain
