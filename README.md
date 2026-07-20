@@ -211,9 +211,13 @@ Provider order is config-driven via `providers.yaml` — swap models without cod
 # Default: Semgrep discovery + per-finding LLM investigation
 threatlens pr analyze https://github.com/<owner>/<repo>/pull/<n>
 
-# Convenience: repo URL or owner/repo → latest open PR (--pr N to pin)
+# Convenience: bare repo URL → scan default-branch code (not auto-latest-PR)
 threatlens pr analyze https://github.com/<owner>/<repo>
-threatlens pr analyze <owner>/<repo> --pr 3
+threatlens pr analyze <owner>/<repo>
+
+# Pin a PR on that repo (PR-scoped changed-files scan)
+threatlens pr analyze https://github.com/<owner>/<repo> --pr 3
+threatlens pr analyze https://github.com/<owner>/<repo>/pull/3
 
 # CodeQL discovery (dataflow/taint), or Semgrep + CodeQL fused
 threatlens pr analyze <PR_URL> --discovery codeql
@@ -234,8 +238,9 @@ threatlens pr analyze <PR_URL> --output report.html --format html
 threatlens pr analyze <PR_URL> --model openai/gpt-oss-20b:free
 ```
 
-ThreatLens still scans **PR changed files**, not a whole-repo crawl. A bare repo
-link is only a shortcut that picks the latest open PR (or latest PR if none are open).
+ThreatLens still prefers **PR changed files** when you pass a PR URL or `--pr`.
+A bare repo link scans the **default branch** (scannable source files, capped)
+so vulnerable demo repos work without hunting for a PR number.
 
 The `html` format is a self-contained, dependency-free report: open it in a
 browser, and expand any finding to watch its source→sink→verdict trace reveal

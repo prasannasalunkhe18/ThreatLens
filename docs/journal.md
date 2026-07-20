@@ -371,3 +371,25 @@ evidence/reasoning trace, impact, verdict/confidence, remediation (from matched
 skill mitigation patterns for now — LLM-authored fix text deferred), and
 metadata. Multi-page serve + `write_html_report` directory output. Schema fields
 for LLM remediation/severity left for a later Stage 3.
+
+---
+
+## 2026-07-20 — Default-branch repo scan
+**Worked on:** Bare repo URL no longer auto-picks the latest open PR (which
+could be a deps-only bump with 0 findings). Instead: bare repo → default-branch
+code scan; PR URL or `--pr N` → PR-scoped changed-files scan.
+
+**Decisions made:**
+- Synthetic `PullRequest` with `scope="repo"` so Semgrep/CodeQL materialize paths reuse existing fetch
+- Caps: 200 files, 200KB/file, top 15 investigations by severity (cost control)
+- Tree via GitHub Trees API + suffix/dir filters (skip `node_modules`, etc.)
+
+**What broke / didn't work:** Auto-latest-PR on damn-vulnerable-MCP-server
+landed on a Snyk starlette bump (`requirements.txt` only) → empty report looked
+like a product failure.
+
+**Why:** Convenience shortcut optimized for "pick something to scan" but wrong
+for vulnerable demo repos where the interesting code is on `main`, not the
+latest PR.
+
+**Next session:** Optional live smoke on damn-vulnerable-MCP-server without `--pr`.

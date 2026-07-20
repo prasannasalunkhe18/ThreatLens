@@ -43,9 +43,14 @@ class PullRequest:
     head_repo_owner: str = ""
     head_repo_name: str = ""
     head_sha: str = ""
+    # "pr" = changed files on a pull request; "repo" = default-branch code scan.
+    scope: str = "pr"
 
     @property
     def full_name(self) -> str:
+        if self.scope == "repo":
+            short = (self.head_sha or "")[:7]
+            return f"{self.owner}/{self.repo}@{short or self.head_ref}"
         return f"{self.owner}/{self.repo}#{self.number}"
 
     def content_sources(self) -> list[tuple[str, str, str]]:
@@ -73,6 +78,29 @@ class PullRequest:
                 out.append(s)
         return out
 
+
+# Scannable suffixes for default-branch repo scans (aligned with Semgrep).
+REPO_SCANNABLE_SUFFIXES = (
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rb", ".php",
+    ".cs", ".rs", ".c", ".cpp", ".scala", ".kt", ".ml", ".html",
+)
+SKIP_DIR_PARTS = {
+    "node_modules", ".git", "dist", "build", "vendor", "__pycache__",
+    ".venv", "venv", ".tox", "coverage", ".next", "target", "out",
+    "third_party", "third-party",
+}
+MAX_REPO_FILES = 200
+MAX_REPO_FILE_BYTES = 200_000
+
+
+def _is_repo_scannable_path(path: str, size: int) -> bool:
+    if size <= 0 or size > MAX_REPO_FILE_BYTES:
+        return False
+    parts = path.replace("\\", "/").split("/")
+    if any(p in SKIP_DIR_PARTS for p in parts):
+        return False
+    lower = path.lower()
+    return any(lower.endswith(suf) for suf in REPO_SCANNABLE_SUFFIXES)
 
 class GitHubClientError(Exception):
     """Raised when GitHub API calls fail."""
@@ -127,11 +155,10 @@ class GitHubClient:
         return match.group("owner"), match.group("repo").removesuffix(".git")
 
     def resolve_to_pr_url(self, target: str, *, pr_number: int | None = None) -> str:
-        """Accept a PR URL or repo URL and return a concrete PR URL.
+        """Resolve to a concrete PR URL when PR mode is requested.
 
-        Repo convenience: picks the most recently updated **open** PR, or if
-        none are open, the most recently updated PR of any state. Pass
-        ``pr_number`` to pin a specific PR when given a repo.
+        Bare repos without ``pr_number`` are no longer auto-mapped to a PR —
+        use ``fetch_analysis_target`` for default-branch scans.
         """
         text = target.strip()
         if PR_URL_RE.match(text):
@@ -141,33 +168,98 @@ class GitHubClient:
             return text.rstrip("/")
 
         owner, repo = self.parse_repo_ref(text)
-        if pr_number is not None:
-            return f"https://github.com/{owner}/{repo}/pull/{pr_number}"
-
-        chosen = self._latest_pr(owner, repo, state="open")
-        if chosen is None:
-            chosen = self._latest_pr(owner, repo, state="all")
-        if chosen is None:
+        if pr_number is None:
             raise GitHubClientError(
-                f"No pull requests found in {owner}/{repo}. "
-                "ThreatLens analyzes PR changes — open a PR or pass "
-                "https://github.com/<owner>/<repo>/pull/<n> directly."
+                f"Repository {owner}/{repo} needs --pr N for PR mode, "
+                "or omit --pr to scan the default branch."
             )
-        html_url = chosen.get("html_url") or (
-            f"https://github.com/{owner}/{repo}/pull/{chosen['number']}"
-        )
-        return html_url
+        return f"https://github.com/{owner}/{repo}/pull/{pr_number}"
 
-    def _latest_pr(self, owner: str, repo: str, *, state: str) -> dict | None:
-        """Most recently updated PR for state=open|closed|all (GitHub sort)."""
-        response = self._get(
-            f"/repos/{owner}/{repo}/pulls"
-            f"?state={state}&sort=updated&direction=desc&per_page=1"
+    def fetch_analysis_target(
+        self, target: str, *, pr_number: int | None = None
+    ) -> PullRequest:
+        """Load a PR or a default-branch repo scan target.
+
+        - PR URL → that PR
+        - repo URL / owner/repo + ``--pr N`` → that PR
+        - bare repo (no ``--pr``) → default-branch code scan (synthetic PR)
+        """
+        text = target.strip()
+        if PR_URL_RE.match(text) or pr_number is not None:
+            return self.fetch_pr(self.resolve_to_pr_url(text, pr_number=pr_number))
+        return self.fetch_repo_scan(text)
+
+    def get_default_branch(self, owner: str, repo: str) -> tuple[str, str]:
+        """Return ``(default_branch, head_sha)`` for the repo."""
+        meta = self._get(f"/repos/{owner}/{repo}").json()
+        branch = meta.get("default_branch") or "main"
+        ref = self._get(f"/repos/{owner}/{repo}/git/ref/heads/{branch}").json()
+        sha = (ref.get("object") or {}).get("sha") or ""
+        if not sha:
+            # Fallback: branch tip from branches API
+            br = self._get(f"/repos/{owner}/{repo}/branches/{branch}").json()
+            sha = (br.get("commit") or {}).get("sha") or ""
+        if not sha:
+            raise GitHubClientError(f"Could not resolve default branch SHA for {owner}/{repo}")
+        return branch, sha
+
+    def list_scannable_paths(
+        self,
+        owner: str,
+        repo: str,
+        ref: str,
+        *,
+        max_files: int = MAX_REPO_FILES,
+    ) -> list[str]:
+        """Recursive tree paths suitable for Semgrep (filtered + capped)."""
+        tree = self._get(
+            f"/repos/{owner}/{repo}/git/trees/{ref}?recursive=1"
+        ).json()
+        if tree.get("truncated"):
+            # Still usable — we just may miss paths beyond GitHub's truncation.
+            pass
+        paths: list[str] = []
+        for entry in tree.get("tree") or []:
+            if entry.get("type") != "blob":
+                continue
+            path = entry.get("path") or ""
+            size = int(entry.get("size") or 0)
+            if not _is_repo_scannable_path(path, size):
+                continue
+            paths.append(path)
+            if len(paths) >= max_files:
+                break
+        return paths
+
+    def fetch_repo_scan(self, repo_ref: str) -> PullRequest:
+        """Build a synthetic PullRequest for default-branch code scanning."""
+        owner, repo = self.parse_repo_ref(repo_ref)
+        branch, sha = self.get_default_branch(owner, repo)
+        paths = self.list_scannable_paths(owner, repo, sha)
+        files = [PRFile(filename=p, status="modified") for p in paths]
+        short = sha[:7]
+        return PullRequest(
+            owner=owner,
+            repo=repo,
+            number=0,
+            title=f"Default branch scan ({branch} @{short})",
+            body=(
+                f"Repo-wide Semgrep/CodeQL scan of {owner}/{repo} "
+                f"default branch `{branch}` at `{short}` "
+                f"({len(files)} scannable files, capped at {MAX_REPO_FILES})."
+            ),
+            author="",
+            base_ref=branch,
+            head_ref=branch,
+            html_url=f"https://github.com/{owner}/{repo}/tree/{branch}",
+            diff="",
+            files=files,
+            commits_summary=[f"{short} default branch HEAD"],
+            head_repo_owner=owner,
+            head_repo_name=repo,
+            head_sha=sha,
+            scope="repo",
         )
-        batch = response.json()
-        if not batch:
-            return None
-        return batch[0]
 
     def _get(self, path: str, *, accept: str | None = None) -> httpx.Response:
         headers = {"Accept": accept} if accept else None

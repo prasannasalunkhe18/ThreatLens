@@ -43,10 +43,13 @@ def test_finding_to_threat_carries_cwes():
 def test_threat_model_from_findings_summary():
     tm = threat_model_from_findings([])
     assert "no findings" in tm.pr_summary
+    assert "PR's changed files" in tm.pr_summary
     tm2 = threat_model_from_findings(
         [Finding(finding_id="F1", rule_id="r1"), Finding(finding_id="F2", rule_id="r2")]
     )
     assert len(tm2.threats) == 2
+    tm_repo = threat_model_from_findings([], scope="repo")
+    assert "default-branch files" in tm_repo.pr_summary
 
 
 def test_semgrep_pipeline_with_matched_skill():

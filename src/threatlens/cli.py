@@ -79,12 +79,12 @@ def main(
 def analyze(
     target: str = typer.Argument(
         ...,
-        help="GitHub PR URL, repo URL, or owner/repo (repo resolves to latest open PR)",
+        help="GitHub PR URL, repo URL, or owner/repo (bare repo → default-branch scan)",
     ),
     pr_number: Optional[int] = typer.Option(
         None,
         "--pr",
-        help="When given a repo URL, analyze this PR number instead of auto-picking",
+        help="When given a repo URL, analyze this PR instead of scanning the default branch",
     ),
     context_file: Optional[Path] = typer.Option(
         None,
@@ -164,18 +164,26 @@ def analyze(
     try:
         with GitHubClient(settings.github_token) as gh:
             with console.status("Resolving GitHub target..."):
-                pr_url = gh.resolve_to_pr_url(target, pr_number=pr_number)
-            if pr_url.rstrip("/") != target.strip().rstrip("/"):
-                console.print(f"[dim]Resolved to[/dim] {pr_url}")
+                pr = gh.fetch_analysis_target(target, pr_number=pr_number)
 
-            with console.status("Fetching PR from GitHub..."):
-                pr = gh.fetch_pr(pr_url)
+            if pr.scope == "repo":
+                console.print(
+                    f"[dim]Scanning default branch[/dim] {pr.head_ref} "
+                    f"@{pr.head_sha[:7]} ([cyan]{len(pr.files)}[/cyan] files)"
+                )
+                panel_title = "Repository"
+            else:
+                if pr.html_url.rstrip("/") != target.strip().rstrip("/"):
+                    console.print(f"[dim]Resolved to[/dim] {pr.html_url}")
+                panel_title = "Pull Request"
 
             console.print(
                 Panel(
                     f"[cyan]{pr.title}[/cyan]\n"
-                    f"{pr.full_name} by {pr.author} | {len(pr.files)} files changed",
-                    title="Pull Request",
+                    f"{pr.full_name}"
+                    + (f" by {pr.author}" if pr.author else "")
+                    + f" | {len(pr.files)} files",
+                    title=panel_title,
                 )
             )
 

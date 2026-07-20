@@ -76,17 +76,36 @@ def _humanize_finding_name(rule_id: str, message: str) -> str:
     return rule_id or "Finding"
 
 
-def threat_model_from_findings(findings: list[Finding], discovery: str = "semgrep") -> ThreatModel:
+def threat_model_from_findings(
+    findings: list[Finding],
+    discovery: str = "semgrep",
+    *,
+    scope: str = "pr",
+) -> ThreatModel:
     rules = {f.rule_id for f in findings if f.rule_id}
     tools = sorted({s for f in findings for s in f.source.split("+") if s}) or [discovery]
     label = "/".join(tools)
+    where = "default-branch files" if scope == "repo" else "PR's changed files"
     summary = (
         f"{label} discovery surfaced {len(findings)} finding(s) "
-        f"across {len(rules)} rule(s) in the PR's changed files."
+        f"across {len(rules)} rule(s) in the {where}."
         if findings
-        else f"{discovery} discovery surfaced no findings in the PR's changed files."
+        else f"{discovery} discovery surfaced no findings in the {where}."
     )
     return ThreatModel(pr_summary=summary, threats=[finding_to_threat(f) for f in findings])
+
+
+_SEV_RANK = {"error": 0, "critical": 0, "warning": 1, "high": 1, "info": 2, "medium": 2}
+MAX_REPO_INVESTIGATIONS = 15
+
+
+def _prioritize_findings(findings: list[Finding], *, limit: int) -> list[Finding]:
+    """Keep highest-severity findings first (repo scans can be noisy)."""
+    ranked = sorted(
+        findings,
+        key=lambda f: (_SEV_RANK.get((f.severity or "").lower(), 9), f.finding_id),
+    )
+    return ranked[:limit]
 
 
 def _discover(
@@ -187,7 +206,12 @@ def run_pipeline(
     else:
         findings = _discover(pr, gh, discovery, semgrep_runner)
 
-    threat_model = threat_model_from_findings(findings, discovery)
+    if pr.scope == "repo" and len(findings) > MAX_REPO_INVESTIGATIONS:
+        findings = _prioritize_findings(findings, limit=MAX_REPO_INVESTIGATIONS)
+
+    threat_model = threat_model_from_findings(
+        findings, discovery, scope=pr.scope
+    )
     report = PipelineReport(
         pr_url=pr.html_url,
         pr_title=pr.title,

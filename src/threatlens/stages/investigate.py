@@ -138,7 +138,7 @@ def build_investigation_prompt(
         skill_block = load_generic_prompt()
 
     parts = [
-        f"PR: {pr.full_name} — {pr.title}",
+        f"Target: {pr.full_name} — {pr.title}",
         "",
         "## Threat under investigation",
         f"id: {threat.threat_id}",
@@ -148,12 +148,26 @@ def build_investigation_prompt(
         "",
         "## Investigation skill",
         skill_block,
-        "",
-        "## PR diff",
-        "```diff",
-        pr.diff[:40000],
-        "```",
     ]
+    if pr.diff.strip():
+        parts.extend(
+            [
+                "",
+                "## PR diff",
+                "```diff",
+                pr.diff[:40000],
+                "```",
+            ]
+        )
+    else:
+        parts.extend(
+            [
+                "",
+                "## Scope",
+                "Default-branch / repo scan (no PR diff). Use file contents and "
+                "the finding location to judge reachability.",
+            ]
+        )
     if file_context:
         parts.extend(["", "## Full file contents (head ref)", file_context])
     return "\n".join(parts)
