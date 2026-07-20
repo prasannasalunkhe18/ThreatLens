@@ -205,11 +205,68 @@ Required env vars (see `.env.example`):
 
 Provider order is config-driven via `providers.yaml` — swap models without code changes.
 
+## Run your first scan (step by step)
+
+You only need a PR link (or a repo link). Do this once, then reuse the same
+commands for any target.
+
+1. **Install ThreatLens** (from the project folder):
+   ```bash
+   python -m venv .venv
+   .venv\Scripts\activate          # Windows
+   # source .venv/bin/activate     # macOS / Linux
+   pip install -e ".[dev]"
+   ```
+2. **Add API keys** — copy `.env.example` to `.env` and paste:
+   - `GITHUB_TOKEN` — [GitHub → Settings → Developer settings → Personal access tokens](https://github.com/settings/tokens) (read-only is enough)
+   - `OPENROUTER_API_KEY` and/or `GROQ_API_KEY` — free LLM keys for the investigation step
+3. **Start Docker Desktop** (Windows users — Semgrep runs in Docker). On macOS/Linux you can `pip install semgrep` instead.
+4. **(Optional) Install CodeQL** — only if you want `--discovery both` or `codeql`:
+   ```bash
+   python scripts/setup_codeql.py
+   ```
+5. **Run a scan** — pick one:
+
+   **A. Simple scan (Semgrep + LLM), open the report in your browser**
+   ```bash
+   threatlens pr analyze https://github.com/juice-shop/juice-shop/pull/655 --serve
+   ```
+
+   **B. Stronger discovery (Semgrep + CodeQL fused) + browser report**
+   ```bash
+   threatlens pr analyze https://github.com/juice-shop/juice-shop/pull/655 --discovery both --serve
+   ```
+
+   **C. Scan a whole repo’s default branch** (no PR number needed)
+   ```bash
+   threatlens pr analyze https://github.com/vulnerable-apps/damn-vulnerable-MCP-server --serve
+   ```
+
+6. **Read the report** — the terminal prints findings; with `--serve`, your browser
+   opens `http://127.0.0.1:8000/`. Click a finding for the full write-up (location,
+   reasoning trace, verdict). Stop the server with `Ctrl+C` in the terminal.
+
+**What each flag means**
+
+| Flag | Plain English |
+|------|----------------|
+| *(none)* | Semgrep finds candidates; LLM says true/false positive |
+| `--discovery both` | Semgrep **and** CodeQL; agreement is marked higher confidence |
+| `--serve` | Host the HTML report locally and open it in the browser |
+| `--stage1-only` | Scan only — skip LLM investigation (faster, no verdicts) |
+| `--pr 3` | When you pass a repo URL, analyze PR `#3` instead of the default branch |
+
+Tip: first runs can take a few minutes (Docker image pull, CodeQL, LLM calls).
+Later runs on the same machine are faster.
+
 ## Usage
 
 ```bash
 # Default: Semgrep discovery + per-finding LLM investigation
 threatlens pr analyze https://github.com/<owner>/<repo>/pull/<n>
+
+# Same, and open the interactive HTML report in the browser
+threatlens pr analyze https://github.com/<owner>/<repo>/pull/<n> --serve
 
 # Convenience: bare repo URL → scan default-branch code (not auto-latest-PR)
 threatlens pr analyze https://github.com/<owner>/<repo>
