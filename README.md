@@ -193,6 +193,10 @@ copy .env.example .env          # then fill in keys
   - *Windows:* Semgrep has no native binary; **Docker Desktop must be running**
     for default / `both` scans. The runner uses the official `semgrep/semgrep`
     image automatically (`docker pull semgrep/semgrep`).
+    - Find it under Docker Desktop → **Images** (search `semgrep`), not
+      **Containers**. ThreatLens runs Semgrep with `docker run --rm`, so the
+      container appears briefly during a scan and then disappears — that is
+      expected.
 - **CodeQL** (optional, for `--discovery codeql` or `both`) — one-time bundle
   setup; does **not** need Docker:
   ```bash
@@ -200,6 +204,11 @@ copy .env.example .env          # then fill in keys
   ```
   Or point `THREATLENS_CODEQL` at an existing `codeql` binary. Only no-build
   languages are analyzed (Python, JavaScript/TypeScript, Ruby).
+
+**Do I need Docker every time?** On Windows, yes whenever the scan uses Semgrep
+(default or `--discovery both`). Start Docker Desktop before the command; you do
+not need a Semgrep container left running. `--discovery codeql` alone does not
+need Docker. On macOS/Linux with a local `semgrep` binary, Docker is optional.
 
 Required env vars (see `.env.example`):
 
@@ -227,8 +236,10 @@ commands for any target.
    - `GITHUB_TOKEN` — [GitHub → Settings → Developer settings → Personal access tokens](https://github.com/settings/tokens) (read-only is enough)
    - `OPENROUTER_API_KEY` and/or `GROQ_API_KEY` — free LLM keys for the investigation step
 3. **Semgrep backend** — Windows: start **Docker Desktop** before any scan that
-   uses Semgrep (default or `--discovery both`). macOS/Linux: `pip install semgrep`
-   instead (no Docker). CodeQL-only scans (`--discovery codeql`) do not need Docker.
+   uses Semgrep (default or `--discovery both`). Confirm the image exists under
+   **Images** → search `semgrep` (not under Containers). macOS/Linux:
+   `pip install semgrep` instead (no Docker). CodeQL-only (`--discovery codeql`)
+   does not need Docker.
 4. **(Optional) Install CodeQL** — needed for `--discovery codeql` or `both`:
    ```bash
    python scripts/setup_codeql.py
