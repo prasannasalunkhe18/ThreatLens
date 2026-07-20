@@ -76,34 +76,16 @@ finding gets a verdict:** a registry miss falls back to the generic lens
 
 ## Workflow
 
-End-to-end runtime flow of a single `threatlens pr analyze` invocation:
-
 ```mermaid
-sequenceDiagram
-    autonumber
-    participant U as CLI
-    participant GH as GitHub
-    participant D as Discovery (Semgrep/CodeQL)
-    participant R as Skill Registry
-    participant L as LLM (provider chain)
-    participant O as Report
-
-    U->>GH: fetch PR (diff, changed files @ head SHA)
-    GH-->>U: files + metadata
-    U->>D: scan changed files
-    D-->>U: CWE-tagged Finding[] (fused, de-duped)
-    loop for each finding
-        U->>R: lookup skill by CWE
-        R-->>U: matched skill | generic
-        U->>L: investigate — trace source→sink, apply lens
-        L-->>U: verdict + confidence (1–10) + reasoning chain
-    end
-    U->>O: render (json / md / html) or serve locally
+flowchart LR
+    A[PR URL] --> B[Fetch PR]
+    B --> C[Scan<br/>Semgrep / CodeQL]
+    C --> D[Investigate each finding<br/>skill or generic]
+    D --> E[Report<br/>json / md / html / --serve]
 ```
 
-If discovery yields nothing, the pipeline stops before any LLM call — a clean PR
-costs zero tokens. The loop is per-finding and independent, so a single failed or
-rate-limited investigation is recorded in `errors` without sinking the whole run.
+A clean PR (no findings) stops after the scan — zero LLM calls. Each finding is
+investigated independently, so one failure doesn't sink the run.
 
 ## Confidence heuristic
 
