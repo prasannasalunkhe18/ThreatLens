@@ -1,7 +1,6 @@
-"""Serve a rendered HTML report from a tiny local HTTP server.
+"""Serve a multi-page HTML report from a tiny local HTTP server.
 
-Keeps the report in memory instead of writing a file to disk — the report is
-held as a byte string and served on every request until interrupted.
+Pages are held in memory (path → bytes) — nothing written to disk.
 """
 
 from __future__ import annotations
@@ -12,11 +11,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 MAX_PORT_TRIES = 20
 
 
-def _make_handler(body: bytes):
+def _make_handler(pages: dict[str, bytes]):
     class ReportHandler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802 (stdlib naming)
+        def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
-            if path not in ("/", "/index.html"):
+            if path in pages:
+                body = pages[path]
+            elif path.rstrip("/") in pages:
+                body = pages[path.rstrip("/")]
+            else:
                 self.send_error(404, "Not found")
                 return
             self.send_response(200)
@@ -26,28 +29,26 @@ def _make_handler(body: bytes):
             self.end_headers()
             self.wfile.write(body)
 
-        def log_message(self, *args) -> None:  # silence default request logging
+        def log_message(self, *args) -> None:
             pass
 
     return ReportHandler
 
 
-def serve_html(
-    html: str,
+def serve_pages(
+    pages: dict[str, str],
     *,
     host: str = "127.0.0.1",
     port: int = 8000,
     open_browser: bool = True,
     on_start=None,
 ) -> None:
-    """Serve ``html`` on ``http://host:port/`` until Ctrl+C.
+    """Serve ``pages`` (URL path → HTML) until Ctrl+C."""
+    encoded = {p: html.encode("utf-8") for p, html in pages.items()}
+    if "/" not in encoded and "/index.html" in encoded:
+        encoded["/"] = encoded["/index.html"]
 
-    If ``port`` is busy, the next free port (up to ``MAX_PORT_TRIES`` higher) is
-    used. ``on_start(url)`` is called once the server is bound.
-    """
-    body = html.encode("utf-8")
-    handler = _make_handler(body)
-
+    handler = _make_handler(encoded)
     server: ThreadingHTTPServer | None = None
     last_err: OSError | None = None
     chosen = port
@@ -56,7 +57,7 @@ def serve_html(
             server = ThreadingHTTPServer((host, candidate), handler)
             chosen = candidate
             break
-        except OSError as exc:  # port in use / not available
+        except OSError as exc:
             last_err = exc
     if server is None:
         raise OSError(
@@ -69,7 +70,7 @@ def serve_html(
     if open_browser:
         try:
             webbrowser.open(url)
-        except Exception:  # headless / no browser — non-fatal
+        except Exception:
             pass
 
     try:
@@ -78,3 +79,21 @@ def serve_html(
         pass
     finally:
         server.server_close()
+
+
+def serve_html(
+    html: str,
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    open_browser: bool = True,
+    on_start=None,
+) -> None:
+    """Back-compat: serve a single HTML document at ``/``."""
+    serve_pages(
+        {"/": html, "/index.html": html},
+        host=host,
+        port=port,
+        open_browser=open_browser,
+        on_start=on_start,
+    )

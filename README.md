@@ -211,6 +211,10 @@ Provider order is config-driven via `providers.yaml` — swap models without cod
 # Default: Semgrep discovery + per-finding LLM investigation
 threatlens pr analyze https://github.com/<owner>/<repo>/pull/<n>
 
+# Convenience: repo URL or owner/repo → latest open PR (--pr N to pin)
+threatlens pr analyze https://github.com/<owner>/<repo>
+threatlens pr analyze <owner>/<repo> --pr 3
+
 # CodeQL discovery (dataflow/taint), or Semgrep + CodeQL fused
 threatlens pr analyze <PR_URL> --discovery codeql
 threatlens pr analyze <PR_URL> --discovery both
@@ -229,6 +233,9 @@ threatlens pr analyze <PR_URL> --output report.md --format md
 threatlens pr analyze <PR_URL> --output report.html --format html
 threatlens pr analyze <PR_URL> --model openai/gpt-oss-20b:free
 ```
+
+ThreatLens still scans **PR changed files**, not a whole-repo crawl. A bare repo
+link is only a shortcut that picks the latest open PR (or latest PR if none are open).
 
 The `html` format is a self-contained, dependency-free report: open it in a
 browser, and expand any finding to watch its source→sink→verdict trace reveal

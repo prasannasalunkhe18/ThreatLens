@@ -18,8 +18,9 @@ from threatlens.github_client import GitHubClient, GitHubClientError
 from threatlens.pipeline import PipelineReport, run_pipeline
 from threatlens.providers.base import LLMError
 from threatlens.providers.chain import FallbackLLMProvider
-from threatlens.report import render_html, render_markdown
-from threatlens.serve import serve_html
+from threatlens.report import render_markdown
+from threatlens.report_pages import render_html_pages, write_html_report
+from threatlens.serve import serve_pages
 from threatlens.skills.registry import SkillRegistry
 
 app = typer.Typer(
@@ -38,12 +39,12 @@ def _serve(report: PipelineReport, port: int, open_browser: bool) -> None:
     def _announce(url: str) -> None:
         console.print(
             f"\n[green]Serving report at[/green] [bold]{url}[/bold]  "
-            "[dim](Ctrl+C to stop)[/dim]"
+            "[dim](Ctrl+C to stop · click a finding for the full write-up)[/dim]"
         )
 
     try:
-        serve_html(
-            render_html(report),
+        serve_pages(
+            render_html_pages(report),
             port=port,
             open_browser=open_browser,
             on_start=_announce,
@@ -76,7 +77,15 @@ def main(
 
 @pr_app.command("analyze")
 def analyze(
-    pr_url: str = typer.Argument(..., help="GitHub pull request URL"),
+    target: str = typer.Argument(
+        ...,
+        help="GitHub PR URL, repo URL, or owner/repo (repo resolves to latest open PR)",
+    ),
+    pr_number: Optional[int] = typer.Option(
+        None,
+        "--pr",
+        help="When given a repo URL, analyze this PR number instead of auto-picking",
+    ),
     context_file: Optional[Path] = typer.Option(
         None,
         "--context-file",
@@ -139,7 +148,7 @@ def analyze(
             raise typer.Exit(1)
         extra_context = context_file.read_text(encoding="utf-8")
 
-    console.print(f"[bold]ThreatLens[/bold] analyzing {pr_url}")
+    console.print(f"[bold]ThreatLens[/bold] analyzing {target}")
 
     try:
         provider = FallbackLLMProvider.from_config(settings, preferred_model=model)
@@ -154,6 +163,11 @@ def analyze(
 
     try:
         with GitHubClient(settings.github_token) as gh:
+            with console.status("Resolving GitHub target..."):
+                pr_url = gh.resolve_to_pr_url(target, pr_number=pr_number)
+            if pr_url.rstrip("/") != target.strip().rstrip("/"):
+                console.print(f"[dim]Resolved to[/dim] {pr_url}")
+
             with console.status("Fetching PR from GitHub..."):
                 pr = gh.fetch_pr(pr_url)
 
@@ -255,13 +269,16 @@ def analyze(
         fmt = output_format.lower()
         if fmt in ("md", "markdown"):
             output.write_text(render_markdown(report), encoding="utf-8")
+            console.print(f"\n[green]Wrote[/green] {output}")
         elif fmt in ("html", "htm"):
-            output.write_text(render_html(report), encoding="utf-8")
+            index = write_html_report(report, output)
+            console.print(f"\n[green]Wrote HTML report[/green] {index.parent}/")
+            console.print(f"[dim]Open[/dim] {index}")
         else:
             output.write_text(
                 json.dumps(report.model_dump(), indent=2), encoding="utf-8"
             )
-        console.print(f"\n[green]Wrote[/green] {output}")
+            console.print(f"\n[green]Wrote[/green] {output}")
 
     if serve:
         _serve(report, port, open_browser=not no_browser)

@@ -19,6 +19,75 @@ def test_parse_pr_url_invalid():
         GitHubClient.parse_pr_url("https://example.com/not-a-pr")
 
 
+def test_parse_repo_ref_url_and_shorthand():
+    assert GitHubClient.parse_repo_ref(
+        "https://github.com/vulnerable-apps/damn-vulnerable-MCP-server"
+    ) == ("vulnerable-apps", "damn-vulnerable-MCP-server")
+    assert GitHubClient.parse_repo_ref("acme/app.git") == ("acme", "app")
+
+
+def test_parse_repo_ref_rejects_pr_url():
+    with pytest.raises(GitHubClientError):
+        GitHubClient.parse_repo_ref("https://github.com/acme/app/pull/1")
+
+
+@respx.mock
+def test_resolve_repo_to_latest_open_pr():
+    base = "https://api.github.com"
+    respx.get(url__regex=rf"{base}/repos/acme/app/pulls\?.*state=open.*").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "number": 9,
+                    "html_url": "https://github.com/acme/app/pull/9",
+                    "title": "Latest open",
+                }
+            ],
+        )
+    )
+    with GitHubClient(token="fake") as client:
+        url = client.resolve_to_pr_url("https://github.com/acme/app")
+    assert url == "https://github.com/acme/app/pull/9"
+
+
+@respx.mock
+def test_resolve_repo_falls_back_when_no_open_prs():
+    base = "https://api.github.com"
+    respx.get(url__regex=rf"{base}/repos/acme/app/pulls\?.*state=open.*").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    respx.get(url__regex=rf"{base}/repos/acme/app/pulls\?.*state=all.*").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "number": 3,
+                    "html_url": "https://github.com/acme/app/pull/3",
+                }
+            ],
+        )
+    )
+    with GitHubClient(token="fake") as client:
+        url = client.resolve_to_pr_url("acme/app")
+    assert url.endswith("/pull/3")
+
+
+def test_resolve_pr_url_passthrough():
+    with GitHubClient(token="fake") as client:
+        assert (
+            client.resolve_to_pr_url("https://github.com/acme/app/pull/7")
+            == "https://github.com/acme/app/pull/7"
+        )
+
+
+def test_resolve_repo_with_explicit_pr_number():
+    with GitHubClient(token="fake") as client:
+        assert (
+            client.resolve_to_pr_url("https://github.com/acme/app", pr_number=12)
+            == "https://github.com/acme/app/pull/12"
+        )
+
 @respx.mock
 def test_fetch_pr():
     base = "https://api.github.com"

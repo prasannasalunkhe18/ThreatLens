@@ -8,7 +8,11 @@ from dataclasses import dataclass, field
 import httpx
 
 PR_URL_RE = re.compile(
-    r"https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)",
+    r"https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)/?",
+    re.IGNORECASE,
+)
+REPO_URL_RE = re.compile(
+    r"^(?:https?://github\.com/)?(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+?)(?:\.git)?/?$",
     re.IGNORECASE,
 )
 
@@ -105,6 +109,65 @@ class GitHubClient:
                 "https://github.com/<owner>/<repo>/pull/<number>"
             )
         return match.group("owner"), match.group("repo"), int(match.group("number"))
+
+    @staticmethod
+    def parse_repo_ref(repo_ref: str) -> tuple[str, str]:
+        """Parse a repo URL or ``owner/repo`` shorthand (not a PR URL)."""
+        text = repo_ref.strip()
+        if PR_URL_RE.match(text):
+            raise GitHubClientError(
+                f"Expected a repository reference, got a PR URL: {repo_ref!r}"
+            )
+        match = REPO_URL_RE.match(text)
+        if not match:
+            raise GitHubClientError(
+                f"Invalid repository: {repo_ref!r}. Expected "
+                "https://github.com/<owner>/<repo> or <owner>/<repo>"
+            )
+        return match.group("owner"), match.group("repo").removesuffix(".git")
+
+    def resolve_to_pr_url(self, target: str, *, pr_number: int | None = None) -> str:
+        """Accept a PR URL or repo URL and return a concrete PR URL.
+
+        Repo convenience: picks the most recently updated **open** PR, or if
+        none are open, the most recently updated PR of any state. Pass
+        ``pr_number`` to pin a specific PR when given a repo.
+        """
+        text = target.strip()
+        if PR_URL_RE.match(text):
+            if pr_number is not None:
+                owner, repo, _ = self.parse_pr_url(text)
+                return f"https://github.com/{owner}/{repo}/pull/{pr_number}"
+            return text.rstrip("/")
+
+        owner, repo = self.parse_repo_ref(text)
+        if pr_number is not None:
+            return f"https://github.com/{owner}/{repo}/pull/{pr_number}"
+
+        chosen = self._latest_pr(owner, repo, state="open")
+        if chosen is None:
+            chosen = self._latest_pr(owner, repo, state="all")
+        if chosen is None:
+            raise GitHubClientError(
+                f"No pull requests found in {owner}/{repo}. "
+                "ThreatLens analyzes PR changes — open a PR or pass "
+                "https://github.com/<owner>/<repo>/pull/<n> directly."
+            )
+        html_url = chosen.get("html_url") or (
+            f"https://github.com/{owner}/{repo}/pull/{chosen['number']}"
+        )
+        return html_url
+
+    def _latest_pr(self, owner: str, repo: str, *, state: str) -> dict | None:
+        """Most recently updated PR for state=open|closed|all (GitHub sort)."""
+        response = self._get(
+            f"/repos/{owner}/{repo}/pulls"
+            f"?state={state}&sort=updated&direction=desc&per_page=1"
+        )
+        batch = response.json()
+        if not batch:
+            return None
+        return batch[0]
 
     def _get(self, path: str, *, accept: str | None = None) -> httpx.Response:
         headers = {"Accept": accept} if accept else None

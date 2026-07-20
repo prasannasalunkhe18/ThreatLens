@@ -363,3 +363,11 @@ columnar finding table). Adapted to ThreatLens vocabulary (TP/FP/both-confirmed
 instead of Critical/High/Medium/Low). No sidebar/app chrome — still a single
 static report. Verdict letter badges (TP/FP), blue finding names, CWE/location/
 source/lens/conf columns, expand-for-trace. Tests updated.
+
+**Follow-up — per-finding detail pages:** clicking a finding now opens a separate
+page (`/finding/<id>`) with the full vulnerability write-up sections:
+identification (incl. severity mapped from scanner), location, description,
+evidence/reasoning trace, impact, verdict/confidence, remediation (from matched
+skill mitigation patterns for now — LLM-authored fix text deferred), and
+metadata. Multi-page serve + `write_html_report` directory output. Schema fields
+for LLM remediation/severity left for a later Stage 3.
