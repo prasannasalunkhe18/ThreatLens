@@ -393,3 +393,28 @@ for vulnerable demo repos where the interesting code is on `main`, not the
 latest PR.
 
 **Next session:** Optional live smoke on damn-vulnerable-MCP-server without `--pr`.
+
+---
+
+## 2026-07-20 — Windows Semgrep / Docker UX notes
+**Worked on:** Clarified for myself (and future demos) how Semgrep shows up in
+Docker Desktop on Windows — after confusing “no Semgrep image” while looking at
+the wrong tab.
+
+**Decisions / facts:**
+- Default + `--discovery both` on Windows need **Docker Desktop running**.
+- Semgrep uses `docker run --rm … semgrep/semgrep` — one-shot container, then gone.
+- Look under Docker Desktop → **Images** (search `semgrep`), **not Containers**.
+  A lasting Semgrep container will not appear; that is expected.
+- `--discovery codeql` alone does **not** need Docker (local `.codeql/` bundle).
+- macOS/Linux can use a local `pip install semgrep` binary and skip Docker.
+
+**What broke / didn't work:** Looking at Containers (other long-running apps
+visible) and assuming Semgrep was missing. Image was already pulled
+(`semgrep/semgrep:latest`); CLI `docker images semgrep/semgrep` confirmed it.
+
+**Why:** Mental model was “I should see a running Semgrep container.” ThreatLens
+never leaves one running — only the image must exist, and the engine must be up.
+
+**Next session:** Keep this out of README unless we add a dedicated Windows FAQ;
+journal is the right place for demo gotchas.
