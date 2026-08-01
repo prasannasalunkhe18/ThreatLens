@@ -129,20 +129,37 @@ def main(
     pass
 
 
+_SAVE_HINT_SHOWN = False
+
+
 def _ask_question(question: PlannedQuestion) -> str | None:
-    """Interactive prompt on stdout (must not run under a Rich status spinner)."""
+    """Interactive security-review prompt (must not run under a Rich spinner)."""
+    global _SAVE_HINT_SHOWN
     console.print()
-    console.print(Panel(question.prompt, title="ThreatLens needs context"))
-    console.print(f"[dim]Why this matters:[/dim] {question.why}")
+    console.print(
+        Panel(
+            question.prompt,
+            title="Security interview (AI-planned)",
+            subtitle="Answer Yes / No / Unknown — like talking to a security engineer",
+        )
+    )
+    console.print(f"[dim]Why I'm asking:[/dim] {question.why}")
     for i, choice in enumerate(question.choices, 1):
         console.print(f"  [bold cyan]{i}[/bold cyan]. {choice}")
     console.print(
-        "[dim]Type a number (1, 2, 3...) or the answer text, then press Enter.[/dim]"
+        "[dim]Type a number (1, 2, 3...) or the answer text, then press Enter. "
+        "Unknown is always fine.[/dim]"
     )
+    if not _SAVE_HINT_SHOWN:
+        console.print(
+            "[dim]Answers are saved for this repository so we don't re-ask next time "
+            "(threatlens context clear to reset).[/dim]"
+        )
+        _SAVE_HINT_SHOWN = True
     sys.stdout.flush()
     sys.stderr.flush()
     try:
-        raw = input("Choose: ").strip()
+        raw = input("Your answer: ").strip()
     except (EOFError, KeyboardInterrupt):
         console.print("\n[yellow]Cancelled — leaving answer unknown.[/yellow]")
         return None
@@ -151,23 +168,13 @@ def _ask_question(question: PlannedQuestion) -> str | None:
     if raw.isdigit():
         idx = int(raw) - 1
         if 0 <= idx < len(question.choices):
-            chosen = question.choices[idx]
-        else:
-            return "Unknown"
-    else:
-        low = raw.lower()
-        matches = [c for c in question.choices if c.lower().startswith(low)]
-        chosen = matches[0] if len(matches) == 1 else (
-            next((c for c in question.choices if c.lower() == low), "Unknown")
-        )
-    sys.stdout.flush()
-    try:
-        save = input("Save this answer for the repository? [Y/n] ").strip()
-    except (EOFError, KeyboardInterrupt):
-        save = "n"
-    if save.lower() in {"n", "no"}:
-        return f"__nosave__:{chosen}"
-    return chosen
+            return question.choices[idx]
+        return "Unknown"
+    low = raw.lower()
+    matches = [c for c in question.choices if c.lower().startswith(low)]
+    if len(matches) == 1:
+        return matches[0]
+    return next((c for c in question.choices if c.lower() == low), "Unknown")
 
 
 def _progress_printer(run_logger: RunLogger):

@@ -17,6 +17,11 @@ from threatlens.context.collect import (
     collect_repository_context,
 )
 from threatlens.context.models import FindingContext
+from threatlens.context.decide import synthesize_context_decisions
+from threatlens.context.interview import (
+    plan_followups_with_ai,
+    plan_interview_with_ai,
+)
 from threatlens.context.questions import (
     PlannedQuestion,
     apply_answer_to_contexts,
@@ -174,9 +179,19 @@ def _hydrate_external_from_store(
         return
     for ctx in contexts:
         for key in (
+            "is_demo_or_training_app",
             "untrusted_users_reachable",
-            "outbound_proxy_blocks_private",
+            "authentication_required",
+            "handles_sensitive_data",
             "feature_enabled_in_production",
+            "edge_controls_present",
+            "outbound_proxy_blocks_private",
+            "ssrf_allowlist_enforced",
+            "injection_runs_privileged",
+            "browser_renders_untrusted_html",
+            "secrets_are_live_credentials",
+            "untrusted_deserialization_accepted",
+            "authz_checks_server_side",
             "block_on_confirmed_high",
         ):
             saved = store.get(
@@ -188,6 +203,21 @@ def _hydrate_external_from_store(
                 apply_answer_to_contexts([ctx], key, saved.value)
 
 
+def _ask_planned(
+    contexts: list[FindingContext],
+    questions: list[PlannedQuestion],
+    asker: QuestionAsker,
+) -> list[PlannedQuestion]:
+    asked: list[PlannedQuestion] = []
+    for question in questions:
+        answer = asker(question)
+        asked.append(question)
+        if answer is None:
+            continue
+        apply_answer_to_contexts(contexts, question.key, answer)
+    return asked
+
+
 def _run_questionnaire(
     contexts: list[FindingContext],
     *,
@@ -195,23 +225,49 @@ def _run_questionnaire(
     asker: QuestionAsker | None,
     interactive: bool,
     refresh_context: bool,
+    provider: LLMProvider | None = None,
+    on_progress: ProgressFn | None = None,
 ) -> None:
     if not contexts:
         return
-    questions = plan_questions(contexts, store=store, refresh=refresh_context)
-    if not questions:
-        return
-    if not interactive or asker is None:
-        return
+    candidates = plan_questions(contexts, store=store, refresh=refresh_context)
+    questions = candidates
 
-    repo_id = contexts[0].repository_context.repository_id
-    for question in questions:
-        answer = asker(question)
-        if answer is None:
-            continue
-        apply_answer_to_contexts(contexts, question.key, answer)
-        # Persistence is owned by the CLI asker (so save confirmation works).
-        _ = repo_id, store
+    if interactive and asker is not None and candidates:
+        if provider is not None:
+            if on_progress is not None:
+                on_progress(
+                    "Planning security interview questions with AI..."
+                )
+            questions = plan_interview_with_ai(contexts, candidates, provider)
+        if on_progress is not None:
+            on_progress(
+                f"Asking {len(questions)} Yes/No/Unknown context question(s)..."
+            )
+        asked = _ask_planned(contexts, questions, asker)
+
+        # Adaptive follow-ups: AI may ask a few more based on answers.
+        if provider is not None:
+            if on_progress is not None:
+                on_progress("Checking whether follow-up questions are needed (AI)...")
+            followups = plan_followups_with_ai(contexts, asked, provider)
+            if followups:
+                if on_progress is not None:
+                    on_progress(
+                        f"Asking {len(followups)} AI follow-up question(s)..."
+                    )
+                _ask_planned(contexts, followups, asker)
+
+    if provider is None:
+        return
+    answers = contexts[0].external_context.answers
+    if not any(v is not None and k != "decision_brief" for k, v in answers.items()):
+        return
+    if on_progress is not None:
+        on_progress(
+            "Synthesizing developer answers into investigation decisions (AI)..."
+        )
+    synthesize_context_decisions(contexts, provider)
 
 
 def _investigate_threats(
@@ -343,6 +399,8 @@ def run_pipeline(
                 asker=question_asker,
                 interactive=interactive,
                 refresh_context=refresh_context,
+                provider=provider,
+                on_progress=on_progress,
             )
             flagged = [t for t in threat_model.threats if t.investigate]
             _investigate_threats(
@@ -394,6 +452,8 @@ def run_pipeline(
             asker=question_asker,
             interactive=interactive,
             refresh_context=refresh_context,
+            provider=provider,
+            on_progress=on_progress,
         )
         finding_contexts = {c.finding.finding_id: c for c in contexts}
         _investigate_threats(

@@ -1,6 +1,7 @@
 from threatlens.discovery.semgrep_scan import (
     _cwes_from_metadata,
     _is_scannable,
+    _normalize_semgrep_path,
     parse_semgrep_json,
 )
 
@@ -45,6 +46,11 @@ def test_parse_semgrep_json_maps_fields():
     f2 = findings[1]
     assert f2.finding_id == "F2"
     assert f2.cwe_ids == []  # no CWE metadata -> empty, still a finding
+
+
+def test_normalize_semgrep_strips_docker_src_prefix():
+    assert _normalize_semgrep_path("/src/core/appHandler.js") == "core/appHandler.js"
+    assert _normalize_semgrep_path("core/appHandler.js") == "core/appHandler.js"
 
 
 def test_parse_empty_results():

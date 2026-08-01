@@ -179,15 +179,38 @@ def build_investigation_prompt(
                 f"test_paths: {', '.join(repo.test_paths[:20]) or '(none)'}",
                 f"deployment_files: {', '.join(repo.deployment_files[:20]) or '(none)'}",
                 "",
-                "## External context (do not invent beyond this)",
+                "## Developer interview (Yes/No/Unknown only — do not invent beyond this)",
+                f"is_demo_or_training_app: {ext.is_demo_or_training_app}",
+                f"deployment_environment: {ext.deployment_environment}",
                 f"internet_facing: {ext.internet_facing}",
                 f"untrusted_users_reachable: {ext.untrusted_users_reachable}",
+                f"authentication_required: {ext.authentication_required}",
+                f"handles_sensitive_data: {ext.handles_sensitive_data}",
                 f"feature_enabled_in_production: {ext.feature_enabled_in_production}",
+                f"edge_controls_present: {ext.edge_controls_present}",
                 f"outbound_proxy_enforced: {ext.outbound_proxy_enforced}",
                 f"proxy_blocks_private_destinations: {ext.proxy_blocks_private_destinations}",
-                f"saved_answers: {ext.answers or '{}'}",
+                f"ssrf_allowlist_enforced: {ext.ssrf_allowlist_enforced}",
+                f"injection_runs_privileged: {ext.injection_runs_privileged}",
+                f"browser_renders_untrusted_html: {ext.browser_renders_untrusted_html}",
+                f"secrets_are_live: {ext.secrets_are_live}",
+                f"untrusted_deserialization_accepted: {ext.untrusted_deserialization_accepted}",
+                f"authz_checks_server_side: {ext.authz_checks_server_side}",
+                f"yes_no_unknown_answers: {ext.answers or '{}'}",
             ]
         )
+        if ext.decision_brief:
+            import json
+
+            parts.extend(
+                [
+                    "",
+                    "## AI decision brief (interpret answers; verify in code)",
+                    "```json",
+                    json.dumps(ext.decision_brief, indent=2)[:4000],
+                    "```",
+                ]
+            )
 
     if hints:
         parts.extend(

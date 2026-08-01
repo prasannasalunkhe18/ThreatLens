@@ -83,6 +83,18 @@ def _cwes_from_metadata(metadata: dict) -> list[str]:
     return cwes
 
 
+def _normalize_semgrep_path(path: str) -> str:
+    """Strip Docker mount prefix so paths match the repo (e.g. ``/src/a.js`` → ``a.js``)."""
+    text = (path or "").replace("\\", "/").strip()
+    if text.startswith("/src/"):
+        return text[len("/src/") :]
+    if text == "/src":
+        return ""
+    if text.startswith("./"):
+        return text[2:]
+    return text.lstrip("/") if text.startswith("/") else text
+
+
 def parse_semgrep_json(payload: dict) -> list[Finding]:
     """Convert Semgrep --json output into Finding models."""
     findings: list[Finding] = []
@@ -94,7 +106,7 @@ def parse_semgrep_json(payload: dict) -> list[Finding]:
             Finding(
                 finding_id=f"F{i}",
                 cwe_ids=_cwes_from_metadata(metadata),
-                file=res.get("path", ""),
+                file=_normalize_semgrep_path(res.get("path", "")),
                 line=int(start.get("line", 0) or 0),
                 rule_id=res.get("check_id", ""),
                 message=(extra.get("message") or "").strip(),

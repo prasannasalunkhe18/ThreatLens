@@ -56,7 +56,20 @@ class ExternalContext(BaseModel):
     feature_enabled_in_production: bool | None = None
     outbound_proxy_enforced: bool | None = None
     proxy_blocks_private_destinations: bool | None = None
+    authentication_required: bool | None = None
+    handles_sensitive_data: bool | None = None
+    is_demo_or_training_app: bool | None = None
+    deployment_environment: str | None = None
+    edge_controls_present: str | None = None
+    secrets_are_live: bool | None = None
+    ssrf_allowlist_enforced: bool | None = None
+    injection_runs_privileged: bool | None = None
+    browser_renders_untrusted_html: bool | None = None
+    untrusted_deserialization_accepted: bool | None = None
+    authz_checks_server_side: bool | None = None
     compensating_controls_note: str | None = None
+    # Filled by context.decide AI layer after Yes/No/Unknown interview.
+    decision_brief: dict | None = None
     answers: dict[str, str | bool | None] = Field(default_factory=dict)
 
 
