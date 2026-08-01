@@ -418,3 +418,51 @@ never leaves one running — only the image must exist, and the engine must be u
 
 **Next session:** Keep this out of README unless we add a dedicated Windows FAQ;
 journal is the right place for demo gotchas.
+
+---
+
+## 2026-08-01 — Evidence triage, interview, docs sync
+
+**Worked on:** Finished the enterprise style refactor and wrote it into the docs
+people actually use for demos and interviews (README, design, PRD, plan, env
+example). Code path was already shipping in commits for evidence investigation,
+AI interview, and production only questions.
+
+**Decisions made:**
+- One investigator for every finding (`evidence_investigator_v1`). No CWE skill
+  router on the active path. Optional hints only.
+- LLM returns structured evidence. Code derives verdict and a separate merge
+  policy action.
+- Free LLM order: Groq `llama-3.3-70b-versatile` first, then OpenRouter free
+  models for capacity. `--model` means prefer first, then fall through.
+- CLI entrypoint is `threatlens analyze`. `pr analyze` stays as a hidden alias.
+- Interview answers are Yes / No / Unknown only. AI plans questions, can follow
+  up, then writes a short decision brief before investigation.
+- Every scan is treated as production. Removed demo / lab / CTF style questions
+  so interview framing never softens a vulnerable sample app.
+- `--serve` fails if the port is busy unless `--allow-port-fallback`. Auto saves
+  a report snapshot and shows a run id so you do not open a stale HTML page.
+- Rate limits: retry with backoff, rotate providers, delay between findings,
+  one cooldown retry pass for failed investigations.
+- UTF-8 console setup in process so Windows demos do not need `PYTHONUTF8=1`.
+
+**What broke / didn't work:**
+- Free OpenRouter models hit 429 hard during multi finding runs. Root cause is
+  per model free quotas, not a missing key. Fix is Groq first plus spacing and
+  chain fallthrough.
+- Local `--serve` could silently keep an old process on port 8000 while a new
+  run claimed a different port. Root cause was "pick next free port" as the
+  default. Fix is fail closed on the requested port.
+- Asking "is this a demo?" trained the model and the operator to underweight
+  real findings on lab apps. Root cause was a context question that leaked
+  non production framing into the investigator. Fix: drop that question and
+  hard code production assumption.
+
+**Why (root cause, not just the fix):** Triage quality depends on three seams
+staying separate: complete cheap discovery, honest human unknowns, and LLM
+evidence that never invents a control. Mixing skill routing, soft demo framing,
+or silent serve port moves each broke one of those seams in demos.
+
+**Next session:** Live demo on a multi finding production framed target
+(for example DVNA with `--serve --refresh-context`), then refresh interview
+talk track from README Interview explanation + this journal entry.
