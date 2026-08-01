@@ -1,11 +1,13 @@
 providers:
-  - name: openrouter
-    models:
-      - nvidia/nemotron-3-super-120b-a12b:free
-      - openai/gpt-oss-20b:free
-      - google/gemma-4-31b-it:free
-      - tencent/hy3:free
+  # Smartest free option first (structured evidence + security reasoning).
   - name: groq
     models:
       - llama-3.3-70b-versatile
-default_provider: openrouter
+  # OpenRouter free models as capacity fallback when Groq rate-limits.
+  - name: openrouter
+    models:
+      - nvidia/nemotron-3-super-120b-a12b:free
+      - google/gemma-4-31b-it:free
+      - openai/gpt-oss-20b:free
+      - tencent/hy3:free
+default_provider: groq

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
-from threatlens.models import Finding, InvestigationResult, Skill, Threat
+from threatlens.hints import hints_for_cwes
+from threatlens.models import Finding, InvestigationResult, Threat
 from threatlens.pipeline import PipelineReport
 from threatlens.report import (
     _HTML_STYLE,
@@ -15,7 +18,41 @@ from threatlens.report import (
     _step_class,
     _step_lead,
 )
-from threatlens.skills.registry import SkillRegistry
+from threatlens.report_labels import (
+    is_actionable,
+    is_benign,
+    policy_label,
+    verdict_label,
+    verdict_state,
+    verdict_value,
+)
+from threatlens.verdict import Verdict
+
+_SERVE_BANNER_EXTRA = """\
+.serve-id {
+  font-size: 12px; color: #1e3a5f; background: #e8f1fb; border: 1px solid #b6d4f0;
+  border-radius: 6px; padding: 10px 14px; margin: 0 0 18px; line-height: 1.45;
+}
+.serve-id strong { color: #0f172a; }
+"""
+
+
+@dataclass(frozen=True)
+class ReportServeMeta:
+    run_id: str | None = None
+    generated_at: datetime | None = None
+
+
+def _serve_identity_html(meta: ReportServeMeta | None) -> str:
+    if meta is None or (not meta.run_id and meta.generated_at is None):
+        return ""
+    parts: list[str] = []
+    if meta.run_id:
+        parts.append(f"<strong>Run</strong> {_esc(meta.run_id)}")
+    if meta.generated_at is not None:
+        stamp = meta.generated_at.astimezone().strftime("%Y-%m-%d %H:%M %Z")
+        parts.append(f"<strong>Generated</strong> {_esc(stamp)}")
+    return f'<div class="serve-id">{" · ".join(parts)}</div>'
 
 _DETAIL_EXTRA = """\
 .crumb { font-size: 13px; color: var(--muted); margin-bottom: 14px; }
@@ -108,18 +145,6 @@ def _normalize_severity(raw: str) -> tuple[str, str]:
     return level, level.capitalize()
 
 
-def _skill_for(cwe_ids: list[str], skill_used: str | None) -> Skill | None:
-    try:
-        reg = SkillRegistry.load()
-    except Exception:
-        return None
-    if skill_used and skill_used != "generic":
-        for s in reg.skills:
-            if s.name == skill_used:
-                return s
-    return reg.match(cwe_ids)
-
-
 def _impact_text(
     inv: InvestigationResult | None,
     cwe_ids: list[str],
@@ -129,40 +154,45 @@ def _impact_text(
         return "Impact not assessed — investigation did not complete."
     if inv is None:
         return "Impact not assessed — finding was not investigated."
-    if inv.verdict == "FALSE_POSITIVE":
+    if is_benign(inv.verdict):
         return (
-            "Investigation did not confirm an exploitable path in the provided "
-            "PR context. Residual risk is low unless the verdict is wrong."
+            "Positive evidence indicates the path is not exploitable in the "
+            "provided context. Residual risk remains if that evidence is wrong."
         )
+    if verdict_value(inv.verdict) == Verdict.INSUFFICIENT_CONTEXT.value:
+        missing = "; ".join(inv.unresolved_questions) or "key reachability facts"
+        return f"Impact not fully assessed — insufficient context: {missing}."
     bits: list[str] = []
     for c in cwe_ids:
         key = c.upper()
         if key in _CWE_IMPACT:
             bits.append(_CWE_IMPACT[key])
     head = (
-        "Investigation confirmed a reachable unmitigated path in this PR's context."
+        "Investigation found a reachable path that appears exploitable "
+        "in this PR's context."
     )
     if bits:
         return head + " " + " ".join(dict.fromkeys(bits))
-    return head + " Review the evidence trace for concrete attacker outcomes."
+    return head + " Review the evidence for concrete attacker outcomes."
 
 
 def _remediation_items(
-    skill: Skill | None, inv: InvestigationResult | None
+    cwe_ids: list[str], inv: InvestigationResult | None
 ) -> list[str]:
-    if inv is not None and inv.verdict == "FALSE_POSITIVE":
+    if inv is not None and is_benign(inv.verdict):
         return [
             "No code change required for this finding based on the current verdict.",
             "Re-check if nearby code changes alter reachability or remove existing controls.",
         ]
-    if skill and skill.mitigation_patterns:
-        items = list(skill.mitigation_patterns)
-        for eco, tip in (skill.mitigation_examples_by_ecosystem or {}).items():
-            items.append(f"{eco}: {tip}")
-        return items
+    hints = hints_for_cwes(cwe_ids)
+    if hints:
+        return hints[:6] + [
+            "Prefer structural fixes (parameterization, allowlists, safe APIs) over "
+            "ad-hoc sanitization.",
+        ]
     return [
-        "Apply a context-appropriate control that restores the data/code boundary "
-        "at the sink (see evidence trace).",
+        "Apply a context-appropriate control that restores the required safety "
+        "property at the sink (see evidence).",
         "Prefer structural fixes (parameterization, allowlists, safe APIs) over "
         "ad-hoc sanitization.",
         "Add a regression test that would fail if this sink becomes reachable again.",
@@ -174,9 +204,11 @@ def _status_label(inv: InvestigationResult | None, err: str | None) -> str:
         return "Error — investigation incomplete"
     if inv is None:
         return "Open — not investigated"
-    if inv.verdict == "TRUE_POSITIVE":
-        return "Confirmed true positive"
-    return "Closed — false positive"
+    if is_actionable(inv.verdict):
+        return f"Open — {verdict_label(inv.verdict).lower()}"
+    if verdict_value(inv.verdict) == Verdict.INSUFFICIENT_CONTEXT.value:
+        return "Needs review — insufficient context"
+    return f"Closed — {verdict_label(inv.verdict).lower()}"
 
 
 def _chain_html(inv: InvestigationResult) -> str:
@@ -205,6 +237,7 @@ def _shell(title: str, body: str) -> str:
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>{_HTML_STYLE}
 {_DETAIL_EXTRA}
+{_SERVE_BANNER_EXTRA}
 </style>
 </head>
 <body>
@@ -226,22 +259,23 @@ def render_finding_page(
 ) -> str:
     rule_id = (finding.rule_id if finding else "") or ""
     message = (finding.message if finding else "") or ""
-    skill_name = inv.skill_used if inv else report.skill_matches.get(threat.threat_id)
-    title = _human_label(threat.name, skill_name, rule_id, message)
+    investigator = (
+        inv.investigator if inv else report.investigators.get(threat.threat_id)
+    )
+    title = _human_label(threat.name, investigator, rule_id, message)
     loc = ""
     if finding and finding.file:
         loc = f"{finding.file}:{finding.line}" if finding.line else finding.file
 
     if inv is not None:
-        state = "tp" if inv.verdict == "TRUE_POSITIVE" else "fp"
-        vtext = "True positive" if state == "tp" else "False positive"
+        state = verdict_state(inv.verdict)
+        vtext = verdict_label(inv.verdict)
     elif err:
         state, vtext = "err", "Error"
     else:
         state, vtext = "na", "Pending"
 
     sev_cls, sev_label = _normalize_severity(finding.severity if finding else "")
-    skill = _skill_for(threat.cwe_ids, skill_name if isinstance(skill_name, str) else None)
     source = (finding.source if finding else "") or report.discovery or "—"
     src_cls = "both" if "+" in source else (
         source if source in ("semgrep", "codeql") else "semgrep"
@@ -266,11 +300,12 @@ def render_finding_page(
 
     desc = threat.description or message or "No description available."
     impact = _impact_text(inv, threat.cwe_ids, err)
-    rem = _remediation_items(skill, inv)
+    rem = _remediation_items(threat.cwe_ids, inv)
     status = _status_label(inv, err)
     meta_kv = [
         ("Discovery source", source, True),
-        ("Investigation lens", (inv.skill_used if inv else skill_name) or "—", False),
+        ("Investigator", (inv.investigator if inv else investigator) or "—", False),
+        ("Merge recommendation", policy_label(inv.policy_action if inv else None), False),
         ("Model", report.model_used or "—", True),
         ("Status", status, False),
     ]
@@ -320,10 +355,10 @@ def render_finding_page(
         verdict_block = '<p><span class="pill na">Pending</span></p>'
 
     rem_html = "<ul>" + "".join(f"<li>{_esc(x)}</li>" for x in rem) + "</ul>"
-    if skill and skill.name:
+    if hints_for_cwes(threat.cwe_ids):
         rem_html = (
-            f'<p class="note">Guidance from skill lens: {_esc(skill.name)} '
-            f"(principle-based; confirm against this code path).</p>"
+            '<p class="note">Optional vulnerability-specific hints '
+            "(non-authoritative; confirm against this code path).</p>"
             + rem_html
         )
 
@@ -354,20 +389,28 @@ def render_finding_page(
     return _shell(f"ThreatLens — {title}", body)
 
 
-def render_index_page(report: PipelineReport) -> str:
+def render_index_page(
+    report: PipelineReport,
+    *,
+    serve_meta: ReportServeMeta | None = None,
+) -> str:
     tm = report.threat_model
     findings_by_id = {f.finding_id: f for f in report.findings}
     inv_by_id = {i.threat_id: i for i in report.investigations}
 
-    tp = sum(1 for i in report.investigations if i.verdict == "TRUE_POSITIVE")
-    fp = sum(1 for i in report.investigations if i.verdict == "FALSE_POSITIVE")
-    n_err = len(report.errors)
+    tp = sum(1 for i in report.investigations if is_actionable(i.verdict))
+    fp = sum(1 for i in report.investigations if is_benign(i.verdict))
+    n_err = len(report.errors) + sum(
+        1
+        for i in report.investigations
+        if verdict_value(i.verdict) == Verdict.INSUFFICIENT_CONTEXT.value
+    )
     both = sum(1 for f in report.findings if f.source and "+" in f.source)
     n_findings = len(tm.threats)
 
     cards = [
-        f'<div class="card tp"><div class="lab"><span class="swatch"></span>True positive</div><div class="n">{tp}</div></div>',
-        f'<div class="card fp"><div class="lab"><span class="swatch"></span>False positive</div><div class="n">{fp}</div></div>',
+        f'<div class="card tp"><div class="lab"><span class="swatch"></span>Confirmed / likely</div><div class="n">{tp}</div></div>',
+        f'<div class="card fp"><div class="lab"><span class="swatch"></span>Not exploitable</div><div class="n">{fp}</div></div>',
     ]
     if both:
         cards.append(
@@ -406,9 +449,9 @@ def render_index_page(report: PipelineReport) -> str:
         href = f"/finding/{t.threat_id}"
 
         if inv is not None:
-            state = "tp" if inv.verdict == "TRUE_POSITIVE" else "fp"
-            letter = "TP" if state == "tp" else "FP"
-            vtext = "True positive" if state == "tp" else "False positive"
+            state = verdict_state(inv.verdict)
+            vtext = verdict_label(inv.verdict)
+            letter = {"tp": "!!", "fp": "OK", "err": "?", "na": "—"}.get(state, "—")
         elif err is not None:
             state, letter, vtext = "err", "!", "Error"
         else:
@@ -416,8 +459,10 @@ def render_index_page(report: PipelineReport) -> str:
 
         rule_id = (f.rule_id if f else "") or ""
         message = (f.message if f else "") or ""
-        skill = inv.skill_used if inv else report.skill_matches.get(t.threat_id)
-        primary = _human_label(t.name, skill, rule_id, message)
+        investigator = (
+            inv.investigator if inv else report.investigators.get(t.threat_id)
+        )
+        primary = _human_label(t.name, investigator, rule_id, message)
         loc = (
             f"{f.file}:{f.line}"
             if f and f.file and f.line
@@ -430,8 +475,8 @@ def render_index_page(report: PipelineReport) -> str:
             src_html = f'<span class="src {_esc(f.source)}">{_esc(f.source)}</span>'
         else:
             src_html = '<span class="src semgrep">—</span>'
-        lens_raw = (inv.skill_used if inv else skill) or "—"
-        lens_cls = "generic" if lens_raw == "generic" else ""
+        lens_raw = investigator or "—"
+        lens_cls = "generic"
         conf = f"{inv.confidence}/10" if inv else "—"
         _, sev_label = _normalize_severity(f.severity if f else "")
 
@@ -451,7 +496,7 @@ def render_index_page(report: PipelineReport) -> str:
 
     table = (
         '<div class="thead"><span>Verdict</span><span>Finding</span><span>CWE</span>'
-        "<span>Location</span><span>Source</span><span>Lens</span><span>Conf</span></div>"
+        "<span>Location</span><span>Source</span><span>Investigator</span><span>Conf</span></div>"
         + "".join(rows)
         if rows
         else '<div class="empty">No findings identified.</div>'
@@ -459,12 +504,13 @@ def render_index_page(report: PipelineReport) -> str:
 
     body = f"""
   <div class="topbar">{"".join(meta_bits)}</div>
+  {_serve_identity_html(serve_meta)}
   <h1 class="title">{_esc(report.pr_title.strip()) or "Untitled PR"}</h1>
   <div class="pr-summary">{_esc(tm.pr_summary)}</div>
   <div class="dash">
     <div class="totals">
       <div class="total"><div class="n">{n_findings}</div><div class="k">Total findings</div></div>
-      <div class="total tp-total"><div class="n">{tp}</div><div class="k">True positives</div></div>
+      <div class="total tp-total"><div class="n">{tp}</div><div class="k">Confirmed / likely</div></div>
     </div>
     <div class="cards">{"".join(cards)}</div>
   </div>
@@ -476,12 +522,19 @@ def render_index_page(report: PipelineReport) -> str:
   </div>
   <footer class="rep">Generated by ThreatLens.</footer>
 """
-    return _shell(f"ThreatLens — {report.pr_title.strip()}", body)
+    title_bits = [report.pr_title.strip() or "ThreatLens report"]
+    if serve_meta and serve_meta.run_id:
+        title_bits.append(serve_meta.run_id)
+    return _shell(f"ThreatLens — {' · '.join(title_bits)}", body)
 
 
-def render_html_pages(report: PipelineReport) -> dict[str, str]:
+def render_html_pages(
+    report: PipelineReport,
+    *,
+    serve_meta: ReportServeMeta | None = None,
+) -> dict[str, str]:
     """Return URL path → HTML for the report site."""
-    pages: dict[str, str] = {"/": render_index_page(report)}
+    pages: dict[str, str] = {"/": render_index_page(report, serve_meta=serve_meta)}
     pages["/index.html"] = pages["/"]
     findings_by_id = {f.finding_id: f for f in report.findings}
     inv_by_id = {i.threat_id: i for i in report.investigations}

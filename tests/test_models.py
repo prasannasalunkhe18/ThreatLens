@@ -1,4 +1,5 @@
 from threatlens.models import InvestigationResult, Threat, ThreatModel
+from threatlens.verdict import Verdict
 
 
 def test_threat_model_roundtrip():
@@ -21,8 +22,22 @@ def test_threat_model_roundtrip():
 def test_investigation_result_bounds():
     result = InvestigationResult(
         threat_id="T1",
-        verdict="TRUE_POSITIVE",
+        verdict=Verdict.CONFIRMED,
         confidence=8,
         reasoning_chain=["unsanitized input", "reaches DB"],
     )
-    assert result.verdict == "TRUE_POSITIVE"
+    assert result.verdict == Verdict.CONFIRMED
+    assert result.investigator == "evidence_investigator_v1"
+
+
+def test_legacy_verdict_migration():
+    result = InvestigationResult.model_validate(
+        {
+            "threat_id": "T1",
+            "verdict": "TRUE_POSITIVE",
+            "confidence": 8,
+            "reasoning_chain": [],
+            "skill_used": "Injection",
+        }
+    )
+    assert result.verdict == Verdict.CONFIRMED

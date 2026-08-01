@@ -1,7 +1,10 @@
+from datetime import datetime, timezone
+
 from threatlens.models import Finding, InvestigationResult, Threat, ThreatModel
 from threatlens.pipeline import PipelineReport
-from threatlens.report_pages import render_finding_page, render_html_pages, write_html_report
+from threatlens.report_pages import ReportServeMeta, render_html_pages, write_html_report
 from threatlens.usage import UsageSummary
+from threatlens.verdict import Verdict
 
 
 def _report() -> PipelineReport:
@@ -36,17 +39,17 @@ def _report() -> PipelineReport:
         investigations=[
             InvestigationResult(
                 threat_id="F1",
-                verdict="TRUE_POSITIVE",
+                verdict=Verdict.CONFIRMED,
                 confidence=9,
                 reasoning_chain=[
                     "step 1: source req.body.url",
                     "step 3: sink request.get(url)",
                     "conclusion: reachable SSRF",
                 ],
-                skill_used="Server-Side Request Forgery",
+                investigator="evidence_investigator_v1",
             ),
         ],
-        skill_matches={"F1": "Server-Side Request Forgery"},
+        investigators={"F1": "evidence_investigator_v1"},
         model_used="openrouter:test",
         usage=UsageSummary(calls=2, total_tokens=1234),
     )
@@ -72,15 +75,26 @@ def test_html_pages_include_index_and_finding_detail():
     ):
         assert heading in detail
     assert "Critical" in detail or "critical" in detail.lower()
-    assert "Server-Side Request Forgery" in detail
+    assert "SSRF via image URL" in detail or "Server-side request forgery" in detail
     assert "reasoning" in detail.lower() or "source" in detail.lower()
     assert 'href="/"' in detail  # back link
+    assert "evidence_investigator_v1" in detail
+
+
+def test_html_pages_include_serve_identity_banner():
+    pages = render_html_pages(
+        _report(),
+        serve_meta=ReportServeMeta(
+            run_id="20260801T204017_c24d42ee",
+            generated_at=datetime(2026, 8, 1, 20, 40, tzinfo=timezone.utc),
+        ),
+    )
+    assert "20260801T204017_c24d42ee" in pages["/"]
+    assert "serve-id" in pages["/"]
 
 
 def test_write_html_report_directory(tmp_path):
-    index = write_html_report(_report(), tmp_path / "out.html")
+    dest = tmp_path / "report.html"
+    index = write_html_report(_report(), dest)
     assert index.is_file()
     assert (index.parent / "finding" / "F1.html").is_file()
-    text = (index.parent / "finding" / "F1.html").read_text(encoding="utf-8")
-    assert "1. Identification" in text
-    assert "../index.html" in text

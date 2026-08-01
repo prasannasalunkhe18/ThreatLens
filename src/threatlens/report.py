@@ -5,10 +5,27 @@ from __future__ import annotations
 import html
 
 from threatlens.pipeline import PipelineReport
+from threatlens.report_labels import (
+    is_actionable,
+    is_benign,
+    policy_label,
+    verdict_label,
+    verdict_state,
+    verdict_value,
+)
+from threatlens.verdict import Verdict
 
 
-def _verdict_badge(verdict: str) -> str:
-    return "🔴 TRUE_POSITIVE" if verdict == "TRUE_POSITIVE" else "🟢 FALSE_POSITIVE"
+def _verdict_badge(verdict: object) -> str:
+    state = verdict_state(verdict)
+    label = verdict_label(verdict).upper()
+    if state == "tp":
+        return f"🔴 {label}"
+    if state == "fp":
+        return f"🟢 {label}"
+    if state == "err":
+        return f"🟡 {label}"
+    return f"⚪ {label}"
 
 
 def render_markdown(report: PipelineReport) -> str:
@@ -24,8 +41,13 @@ def render_markdown(report: PipelineReport) -> str:
     lines.append("")
 
     investigations = {inv.threat_id: inv for inv in report.investigations}
-    true_pos = [i for i in report.investigations if i.verdict == "TRUE_POSITIVE"]
-    false_pos = [i for i in report.investigations if i.verdict == "FALSE_POSITIVE"]
+    confirmed = [i for i in report.investigations if is_actionable(i.verdict)]
+    safe = [i for i in report.investigations if is_benign(i.verdict)]
+    insufficient = [
+        i
+        for i in report.investigations
+        if verdict_value(i.verdict) == Verdict.INSUFFICIENT_CONTEXT.value
+    ]
 
     lines.append("## Summary")
     lines.append("")
@@ -36,8 +58,9 @@ def render_markdown(report: PipelineReport) -> str:
         f"(flagged for investigation: **{sum(1 for t in tm.threats if t.investigate)}**)"
     )
     lines.append(
-        f"- Verdicts: **{len(true_pos)}** true positive, "
-        f"**{len(false_pos)}** false positive"
+        f"- Verdicts: **{len(confirmed)}** confirmed/likely, "
+        f"**{len(safe)}** not exploitable, "
+        f"**{len(insufficient)}** insufficient context"
     )
     if report.usage.calls:
         lines.append(
@@ -54,13 +77,13 @@ def render_markdown(report: PipelineReport) -> str:
     lines.append(f"## {discovery_title}")
     lines.append("")
     if tm.threats:
-        lines.append("| ID | Finding | CWEs | Investigate | Lens |")
-        lines.append("|----|---------|------|-------------|------|")
+        lines.append("| ID | Finding | CWEs | Investigate | Investigator |")
+        lines.append("|----|---------|------|-------------|--------------|")
         for t in tm.threats:
+            inv_name = report.investigators.get(t.threat_id) or "—"
             lines.append(
                 f"| {t.threat_id} | {t.name} | {', '.join(t.cwe_ids) or '—'} | "
-                f"{'yes' if t.investigate else 'no'} | "
-                f"{report.skill_matches.get(t.threat_id) or '—'} |"
+                f"{'yes' if t.investigate else 'no'} | {inv_name} |"
             )
     else:
         lines.append("_No findings identified._")
@@ -76,10 +99,35 @@ def render_markdown(report: PipelineReport) -> str:
             lines.append(f"### {t.threat_id}: {t.name}")
             lines.append("")
             lines.append(f"- **Verdict:** {_verdict_badge(inv.verdict)}")
+            lines.append(f"- **Merge recommendation:** {policy_label(inv.policy_action)}")
             lines.append(f"- **Confidence:** {inv.confidence}/10")
-            lines.append(f"- **Lens:** {inv.skill_used}")
+            lines.append(f"- **Investigator:** {inv.investigator}")
             lines.append(f"- **CWEs:** {', '.join(t.cwe_ids) or '—'}")
             lines.append(f"- **Description:** {t.description}")
+            if inv.external_context_used:
+                lines.append(
+                    "- **External context used:** "
+                    + "; ".join(inv.external_context_used)
+                )
+            if inv.unresolved_questions:
+                lines.append("- **Unresolved:**")
+                for q in inv.unresolved_questions:
+                    lines.append(f"  - {q}")
+            if inv.evidence is not None:
+                lines.append("")
+                lines.append("**Evidence:**")
+                lines.append("")
+                for item in inv.evidence.items():
+                    mark = {
+                        "confirmed": "✓",
+                        "refuted": "✗",
+                        "likely": "~",
+                        "unknown": "?",
+                        "not_applicable": "–",
+                    }.get(item.status.value, "?")
+                    lines.append(
+                        f"- {mark} **{item.key}** ({item.status.value}): {item.summary}"
+                    )
             lines.append("")
             lines.append("**Reasoning chain:**")
             lines.append("")
@@ -428,13 +476,11 @@ def _title_from_rule_id(rule_id: str) -> str:
 
 def _human_label(
     threat_name: str,
-    skill_used: str | None,
+    _investigator: str | None,
     rule_id: str,
     message: str = "",
 ) -> str:
-    """Prefer a readable skill/message title over a raw scanner rule id."""
-    if skill_used and skill_used != "generic":
-        return skill_used
+    """Prefer a readable message title over a raw scanner rule id."""
     from_msg = _title_from_message(message)
     if from_msg:
         return from_msg
@@ -470,9 +516,13 @@ def render_html(report: PipelineReport) -> str:
     findings_by_id = {f.finding_id: f for f in report.findings}
     inv_by_id = {i.threat_id: i for i in report.investigations}
 
-    tp = sum(1 for i in report.investigations if i.verdict == "TRUE_POSITIVE")
-    fp = sum(1 for i in report.investigations if i.verdict == "FALSE_POSITIVE")
-    n_err = len(report.errors)
+    tp = sum(1 for i in report.investigations if is_actionable(i.verdict))
+    fp = sum(1 for i in report.investigations if is_benign(i.verdict))
+    n_err = len(report.errors) + sum(
+        1
+        for i in report.investigations
+        if verdict_value(i.verdict) == Verdict.INSUFFICIENT_CONTEXT.value
+    )
     both = sum(1 for f in report.findings if f.source and "+" in f.source)
     n_findings = len(tm.threats)
 
@@ -484,11 +534,11 @@ def render_html(report: PipelineReport) -> str:
     cards: list[str] = [
         (
             f'<div class="card tp"><div class="lab"><span class="swatch"></span>'
-            f'True positive</div><div class="n">{tp}</div></div>'
+            f'Confirmed / likely</div><div class="n">{tp}</div></div>'
         ),
         (
             f'<div class="card fp"><div class="lab"><span class="swatch"></span>'
-            f'False positive</div><div class="n">{fp}</div></div>'
+            f'Not exploitable</div><div class="n">{fp}</div></div>'
         ),
     ]
     if both:
@@ -537,9 +587,14 @@ def render_html(report: PipelineReport) -> str:
         err = report.errors.get(t.threat_id)
 
         if inv is not None:
-            state = "tp" if inv.verdict == "TRUE_POSITIVE" else "fp"
-            letter = "TP" if state == "tp" else "FP"
-            vtext = "True positive" if state == "tp" else "False positive"
+            state = verdict_state(inv.verdict)
+            vtext = verdict_label(inv.verdict)
+            letter = {
+                "tp": "!!",
+                "fp": "OK",
+                "err": "?",
+                "na": "—",
+            }.get(state, "—")
         elif err is not None:
             state = "err"
             letter = "!"
@@ -551,8 +606,12 @@ def render_html(report: PipelineReport) -> str:
 
         rule_id = (f.rule_id if f and f.rule_id else "") or ""
         message = (f.message if f and f.message else "") or ""
-        skill = inv.skill_used if inv else report.skill_matches.get(t.threat_id)
-        primary = _human_label(t.name, skill, rule_id, message)
+        investigator = (
+            inv.investigator
+            if inv
+            else report.investigators.get(t.threat_id)
+        )
+        primary = _human_label(t.name, investigator, rule_id, message)
         show_rule = bool(rule_id and rule_id != primary)
 
         loc = ""
@@ -573,8 +632,8 @@ def render_html(report: PipelineReport) -> str:
         else:
             src_html = '<span class="src semgrep">—</span>'
 
-        lens_raw = (inv.skill_used if inv else skill) or "—"
-        lens_cls = "generic" if lens_raw == "generic" else ""
+        lens_raw = (investigator if isinstance(investigator, str) else None) or "—"
+        lens_cls = "generic"
         conf_html = (
             f'<span class="conf">{inv.confidence}/10</span>'
             if inv is not None
@@ -659,7 +718,7 @@ def render_html(report: PipelineReport) -> str:
     table = (
         f'<div class="thead">'
         f"<span>Verdict</span><span>Finding</span><span>CWE</span>"
-        f"<span>Location</span><span>Source</span><span>Lens</span>"
+        f"<span>Location</span><span>Source</span><span>Investigator</span>"
         f"<span>Conf</span></div>"
         f'{"".join(rows)}'
         if rows
@@ -693,7 +752,7 @@ def render_html(report: PipelineReport) -> str:
       </div>
       <div class="total tp-total">
         <div class="n">{tp}</div>
-        <div class="k">True positives</div>
+        <div class="k">Confirmed / likely</div>
       </div>
     </div>
     <div class="cards">{"".join(cards)}</div>

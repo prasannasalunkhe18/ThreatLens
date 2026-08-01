@@ -1,4 +1,9 @@
-"""Skill registry — deterministic CWE -> skill lookup, no LLM."""
+"""Deprecated skill registry (no longer used by the analysis pipeline).
+
+Kept temporarily for packaging compatibility and historical YAML under
+``skills/``. Active investigation uses ``evidence_investigator_v1`` with
+optional hints from ``threatlens.hints``.
+"""
 
 from __future__ import annotations
 

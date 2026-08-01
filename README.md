@@ -12,14 +12,16 @@ Point it at a GitHub pull request URL, or at a bare repo URL. It will:
    * **CodeQL** (`--discovery codeql`): dataflow and taint analysis.
    * **Both** (`--discovery both`): runs Semgrep and CodeQL together, fuses
      results, and marks agreement as `codeql+semgrep`.
-2. **Investigate** with an LLM. For each finding it applies a matched CWE skill
-   (or a generic fallback), traces source to sink, and returns TRUE_POSITIVE or
-   FALSE_POSITIVE with confidence and a short reasoning chain. That is the
-   false positive filter.
+2. **Investigate** with an LLM evidence investigator. Every finding receives
+   exactly one structured-evidence investigation (`evidence_investigator_v1`).
+   Deterministic code derives the technical verdict
+   (`confirmed` / `likely` / `not_exploitable` / `insufficient_context`) and a
+   separate merge recommendation (`pass` / `warn` / `require_review` / `block`).
+   Optional CWE hints supplement the prompt but never select a different
+   investigator or decide the verdict.
 
 Legacy v1 LLM discovery is still available with `--discovery=llm` if you want to
-compare. This is a portfolio and interview demo project with its own skill
-schema, output schema, and confidence rubric.
+compare.
 
 ## Architecture
 
@@ -40,14 +42,16 @@ flowchart TB
         FU["Fuse + de-dup<br/>source = codeql+semgrep"]
     end
 
-    subgraph route [Routing]
-        REG["Skill Registry<br/>CWE to skill<br/>deterministic dict lookup"]
+    subgraph context [Context]
+        RC["Repository + finding context"]
+        Q["Conditional external questionnaire"]
+        STORE["Saved context<br/>AppData / XDG"]
     end
 
-    subgraph investigate ["Investigation: LLM verification"]
-        SK["Skill lens<br/>(matched CWE)"]
-        GN["Generic lens<br/>(registry miss)"]
+    subgraph investigate ["Investigation: LLM evidence"]
+        EV["evidence_investigator_v1<br/>structured evidence"]
         PROV["Provider chain<br/>OpenRouter free to Groq"]
+        VD["Deterministic verdict + policy"]
     end
 
     subgraph output [Output]
@@ -61,14 +65,14 @@ flowchart TB
     GH -.->|--discovery=llm legacy| LLMTM["LLM threat modeling"]
     SG --> FU
     CQ --> FU
-    FU -->|Finding array| REG
-    LLMTM -.-> REG
-    REG -->|match| SK
-    REG -->|miss| GN
-    PROV -.LLM calls.-> SK
-    PROV -.LLM calls.-> GN
-    SK -->|verdict + confidence + reasoning| RPT
-    GN -->|verdict + confidence + reasoning| RPT
+    FU -->|Finding array| RC
+    LLMTM -.-> RC
+    RC --> Q
+    STORE --> Q
+    Q --> EV
+    PROV -.LLM calls.-> EV
+    EV --> VD
+    VD --> RPT
     RPT --> SRV
 ```
 
@@ -77,11 +81,9 @@ CodeQL adds dataflow and taint via `security-extended` suites. With
 `--discovery=both`, results are fused and de duplicated; findings both tools
 agree on are marked `codeql+semgrep` (treat that as higher confidence).
 
-Routing from finding to skill is a plain dict lookup. No LLM picks the skill.
-Only the per finding investigation calls the model, which keeps cost and
-latency down and keeps the pipeline auditable. Every finding still gets a
-verdict: a registry miss falls back to the generic lens (`skill_used="generic"`)
-instead of being dropped.
+Every normalized finding receives exactly one evidence investigation. The LLM
+returns structured evidence; verdicts and merge policy are derived in code.
+Missing evidence stays unknown — it is never treated as proof of safety.
 
 ## Workflow
 
@@ -89,8 +91,10 @@ instead of being dropped.
 flowchart LR
     A[PR or repo URL] --> B[Fetch target]
     B --> C[Scan<br/>Semgrep / CodeQL]
-    C --> D[Investigate each finding<br/>skill or generic]
-    D --> E[Report<br/>json / md / html / --serve]
+    C --> D[Context + optional questions]
+    D --> E[Evidence investigation]
+    E --> F[Verdict + policy]
+    F --> G[Report<br/>json / md / html / --serve]
 ```
 
 If the scan finds nothing, the run stops there and spends zero LLM tokens. Each
@@ -109,16 +113,16 @@ in the code you gave the model:
 | 3 to 5 | Plausible, but a key link is unverified in the provided context |
 | 1 to 2 | Mostly speculation |
 
-When context is too thin to confirm reachability, the model should lean
-FALSE_POSITIVE and lower confidence rather than guess. False alarms are the
-problem ThreatLens is trying to shrink.
+When context is too thin to confirm reachability, evidence statuses stay
+`unknown` and the derived verdict is `insufficient_context` or `likely` —
+never a silent pass. Absence of evidence is not evidence of safety.
 
 ## Interview explanation
 
 **One liner.** ThreatLens triages a GitHub PR for vulnerabilities by pairing a
 deterministic static analysis discovery layer with an LLM verification layer, so
-every candidate finding gets an auditable true or false positive verdict with a
-source to sink reasoning chain.
+every candidate finding gets structured evidence, a derived exploitability
+verdict, and a separate merge recommendation.
 
 **The thesis.** Semgrep and CodeQL are good at finding candidate sinks, but they
 are noisy. In real security work, the hard part is triaging those false
@@ -142,20 +146,14 @@ center.
 
 **Design choices worth defending**
 
-* **Deterministic routing, not an agent that picks tools.** CWE to skill is a
-  plain dict lookup. No LLM decides control flow, so runs are reproducible and
-  cheap.
-* **Principle based skills.** Each skill in `skills/*.yaml` encodes the security
-  principle (source definition, sink definition, mitigation patterns, a source
-  to sink checklist) rather than framework specific API names, so it travels
-  across languages. Concrete APIs show up only as illustrative hints.
-* **No finding is ever dropped.** A CWE with no matching skill falls back to a
-  generic lens (`skill_used="generic"`), covered by a test, so coverage does not
-  silently regress when a new rule fires.
-* **Confidence tied to evidence, not vibes.** The 1 to 10 score tracks how much
-  of the source to sink path is visible in the provided code. When reachability
-  cannot be confirmed, the prompt tells the model to lean FALSE_POSITIVE and
-  lower confidence.
+* **One evidence investigator for every finding.** No CWE-to-skill router.
+  Optional CWE hints are non-authoritative supplements only.
+* **LLM returns evidence; code derives verdicts.** Merge policy is separate from
+  technical exploitability.
+* **No finding is ever dropped.** Findings without hints still receive a full
+  investigation (`evidence_investigator_v1`).
+* **Unknown stays unknown.** Missing deployment facts produce
+  `insufficient_context` / review recommendations, not false-positive dismissals.
 * **Swappable, free LLMs.** Providers live in `providers.yaml` with an
   OpenRouter to Groq fallback chain, so one model dying or rate limiting does
   not break a run.
@@ -311,8 +309,15 @@ threatlens pr analyze <PR_URL> --discovery llm
 # Discovery only (no investigation)
 threatlens pr analyze <PR_URL> --stage1-only
 
-# Ignore skills; investigate everything with the generic lens
-threatlens pr analyze <PR_URL> --force-generic
+# CI / non-interactive (never prompts; keeps unknowns)
+threatlens pr analyze <PR_URL> --non-interactive
+
+# Re-ask relevant external-context questions
+threatlens pr analyze <PR_URL> --refresh-context
+
+# Saved context
+threatlens context show
+threatlens context clear --repository github.com/acme/app
 
 # Save the report (json | md | html) and/or pin a model
 threatlens pr analyze <PR_URL> --output report.md --format md
@@ -341,20 +346,16 @@ threatlens report serve report.json
 ```
 
 Discovery (Semgrep and/or CodeQL) surfaces CWE tagged findings in the PR's
-changed files or the repo default branch. Each finding is then traced by the LLM
-(matched skill or generic fallback) and ruled TRUE_POSITIVE or FALSE_POSITIVE
-with a confidence score and reasoning chain.
+changed files or the repo default branch. Each finding is investigated by
+`evidence_investigator_v1`; verdicts and merge recommendations are derived
+deterministically from structured evidence.
 
-## Skills (principle based)
+## Investigation hints (optional)
 
-CWE specific skills live in `skills/*.yaml` (injection, auth, SSRF,
-deserialization). Each one is written around the underlying security principle,
-not specific APIs, so it generalizes across languages and frameworks. A skill
-declares the CWEs it covers, a reachability definition, source and sink
-definitions, mitigation patterns, and a source to sink checklist. Concrete APIs
-appear only as illustrative ecosystem hints. Routing from a finding's CWE to a
-skill is a deterministic dict lookup; a miss uses the generic lens
-(`prompts/investigate_generic.md`). Add a skill by dropping in a new YAML file.
+Optional CWE hints live in `threatlens.hints.INVESTIGATION_HINTS`. They
+supplement the evidence investigator prompt and never select a different
+investigator or decide the verdict. Historical skill YAML under `skills/` is
+deprecated and unused by the pipeline.
 
 ## Eval / tuning
 

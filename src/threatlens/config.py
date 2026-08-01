@@ -20,27 +20,13 @@ class Settings(BaseSettings):
 
 
 def load_provider_config(path: Path | None = None) -> dict:
-    """Load providers.yaml; falls back to defaults matching design.md."""
+    """Load providers.yaml; falls back to Groq-first smart-free defaults."""
     config_path = path or Path("providers.yaml")
     if config_path.is_file():
         with config_path.open(encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
 
-    return {
-        "providers": [
-            {
-                "name": "openrouter",
-                "models": [
-                    "meta-llama/llama-3.3-70b-instruct:free",
-                    "qwen/qwen-2.5-72b-instruct:free",
-                    "deepseek/deepseek-chat:free",
-                    "google/gemini-2.0-flash-exp:free",
-                ],
-            },
-            {
-                "name": "groq",
-                "models": ["llama-3.3-70b-versatile"],
-            },
-        ],
-        "default_provider": "openrouter",
-    }
+    # Lazy import avoids circular import via providers.__init__.
+    from threatlens.providers.priority import default_provider_config
+
+    return default_provider_config()

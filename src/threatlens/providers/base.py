@@ -15,9 +15,27 @@ T = TypeVar("T", bound=BaseModel)
 class LLMError(Exception):
     """Raised when an LLM call fails (rate limit, auth, parse, etc.)."""
 
-    def __init__(self, message: str, *, retryable: bool = False):
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = False,
+        retry_after: float | None = None,
+    ):
         super().__init__(message)
         self.retryable = retryable
+        self.retry_after = retry_after
+
+
+def parse_retry_after(response) -> float | None:
+    """Parse Retry-After header (seconds) when present."""
+    raw = response.headers.get("Retry-After")
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(raw.strip()))
+    except ValueError:
+        return None
 
 
 class Usage(BaseModel):

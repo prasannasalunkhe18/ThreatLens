@@ -1,8 +1,10 @@
-"""ThreatLens CLI — `threatlens pr analyze <PR_URL>`."""
+"""ThreatLens CLI — `threatlens analyze <URL>`."""
 
 from __future__ import annotations
 
 import json
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -14,42 +16,93 @@ from rich.table import Table
 from threatlens import __version__
 from threatlens.banner import render_banner
 from threatlens.config import Settings
+from threatlens.console_encoding import configure_utf8_stdio
+from threatlens.context.questions import PlannedQuestion
+from threatlens.context.store import ContextStore, default_context_path
 from threatlens.discovery import CodeQLError, SemgrepError
 from threatlens.github_client import GitHubClient, GitHubClientError
 from threatlens.pipeline import PipelineReport, run_pipeline
 from threatlens.providers.base import LLMError
 from threatlens.providers.chain import FallbackLLMProvider
 from threatlens.report import render_markdown
-from threatlens.report_pages import render_html_pages, write_html_report
-from threatlens.serve import serve_pages
-from threatlens.skills.registry import SkillRegistry
+from threatlens.report_labels import policy_label, verdict_label, verdict_state
+from threatlens.report_pages import ReportServeMeta, render_html_pages, write_html_report
+from threatlens.run_log import RunLogger, default_runs_dir, save_report_snapshot
+from threatlens.serve import PortInUseError, ServeInfo, serve_pages
+
+# Windows consoles often start as cp1252; fix UTF-8 before any banner/output.
+configure_utf8_stdio()
 
 app = typer.Typer(
     name="threatlens",
-    help="PR vulnerability triage agent — threat modeling + investigation.",
+    help="Vulnerability triage — scan and investigate findings with evidence-driven verdicts.",
     no_args_is_help=True,
 )
-pr_app = typer.Typer(help="Pull request analysis commands.")
+pr_app = typer.Typer(
+    help="Deprecated — use `threatlens analyze` instead.",
+    hidden=True,
+)
 app.add_typer(pr_app, name="pr")
 report_app = typer.Typer(help="Work with saved reports.")
 app.add_typer(report_app, name="report")
+context_app = typer.Typer(help="Inspect and manage saved external context.")
+app.add_typer(context_app, name="context")
+runs_app = typer.Typer(help="Inspect ThreatLens analysis run logs.")
+app.add_typer(runs_app, name="runs")
 console = Console()
 
 
-def _serve(report: PipelineReport, port: int, open_browser: bool) -> None:
-    def _announce(url: str) -> None:
+def _serve(
+    report: PipelineReport,
+    port: int,
+    open_browser: bool,
+    *,
+    allow_port_fallback: bool = False,
+    run_id: str | None = None,
+    saved_path: Path | None = None,
+) -> None:
+    serve_meta = ReportServeMeta(
+        run_id=run_id,
+        generated_at=datetime.now(timezone.utc),
+    )
+
+    def _announce(info: ServeInfo) -> None:
+        if info.port_fallback:
+            console.print(
+                f"\n[yellow]Port {info.requested_port} was busy — serving on "
+                f"{info.port} instead.[/yellow]"
+            )
+            console.print(
+                "[yellow]Do not open the old URL; use only the link below.[/yellow]"
+            )
         console.print(
-            f"\n[green]Serving report at[/green] [bold]{url}[/bold]  "
+            f"\n[green]Serving report at[/green] [bold]{info.url}[/bold]  "
             "[dim](Ctrl+C to stop · click a finding for the full write-up)[/dim]"
         )
+        if run_id:
+            console.print(f"[dim]Run id:[/dim] {run_id}")
+        if saved_path:
+            console.print(f"[dim]Saved report:[/dim] {saved_path}")
+            console.print(
+                f"[dim]Re-serve later:[/dim] threatlens report serve {saved_path}"
+            )
 
     try:
         serve_pages(
-            render_html_pages(report),
+            render_html_pages(report, serve_meta=serve_meta),
             port=port,
             open_browser=open_browser,
+            allow_port_fallback=allow_port_fallback,
             on_start=_announce,
         )
+    except PortInUseError as exc:
+        console.print(f"[red]{exc}[/red]")
+        if saved_path:
+            console.print(
+                f"[dim]Report was saved — serve it after freeing the port:[/dim]\n"
+                f"  threatlens report serve {saved_path}"
+            )
+        raise typer.Exit(1) from exc
     except OSError as exc:
         console.print(f"[red]Could not start server:[/red] {exc}")
         raise typer.Exit(1) from exc
@@ -76,7 +129,65 @@ def main(
     pass
 
 
-@pr_app.command("analyze")
+def _ask_question(question: PlannedQuestion) -> str | None:
+    """Interactive prompt on stdout (must not run under a Rich status spinner)."""
+    console.print()
+    console.print(Panel(question.prompt, title="ThreatLens needs context"))
+    console.print(f"[dim]Why this matters:[/dim] {question.why}")
+    for i, choice in enumerate(question.choices, 1):
+        console.print(f"  [bold cyan]{i}[/bold cyan]. {choice}")
+    console.print(
+        "[dim]Type a number (1, 2, 3...) or the answer text, then press Enter.[/dim]"
+    )
+    sys.stdout.flush()
+    sys.stderr.flush()
+    try:
+        raw = input("Choose: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n[yellow]Cancelled — leaving answer unknown.[/yellow]")
+        return None
+    if not raw:
+        return "Unknown"
+    if raw.isdigit():
+        idx = int(raw) - 1
+        if 0 <= idx < len(question.choices):
+            chosen = question.choices[idx]
+        else:
+            return "Unknown"
+    else:
+        low = raw.lower()
+        matches = [c for c in question.choices if c.lower().startswith(low)]
+        chosen = matches[0] if len(matches) == 1 else (
+            next((c for c in question.choices if c.lower() == low), "Unknown")
+        )
+    sys.stdout.flush()
+    try:
+        save = input("Save this answer for the repository? [Y/n] ").strip()
+    except (EOFError, KeyboardInterrupt):
+        save = "n"
+    if save.lower() in {"n", "no"}:
+        return f"__nosave__:{chosen}"
+    return chosen
+
+
+def _progress_printer(run_logger: RunLogger):
+    def _emit(message: str) -> None:
+        console.print(f"[dim]{message}[/dim]")
+        run_logger.note(message)
+
+    return _emit
+
+
+def _normalize_asker_answer(raw: str | None) -> tuple[str | None, bool]:
+    """Return (answer, should_save)."""
+    if raw is None:
+        return None, False
+    if raw.startswith("__nosave__:"):
+        return raw.split(":", 1)[1], False
+    return raw, True
+
+
+@app.command("analyze")
 def analyze(
     target: str = typer.Argument(
         ...,
@@ -117,12 +228,23 @@ def analyze(
     force_generic: bool = typer.Option(
         False,
         "--force-generic",
-        help="Ignore matched skills; investigate everything with the generic lens",
+        help="Deprecated no-op (all findings use the evidence investigator).",
+        hidden=True,
     ),
     stage1_only: bool = typer.Option(
         False,
         "--stage1-only/--full",
         help="Skip investigation (discovery/threat model only).",
+    ),
+    non_interactive: bool = typer.Option(
+        False,
+        "--non-interactive",
+        help="Never prompt; reuse saved context and keep unknowns.",
+    ),
+    refresh_context: bool = typer.Option(
+        False,
+        "--refresh-context",
+        help="Re-ask relevant external-context questions.",
     ),
     serve: bool = typer.Option(
         False,
@@ -132,7 +254,12 @@ def analyze(
     port: int = typer.Option(
         8000,
         "--port",
-        help="Port for --serve (next free port is used if busy).",
+        help="Port for --serve (fails if busy unless --allow-port-fallback).",
+    ),
+    allow_port_fallback: bool = typer.Option(
+        False,
+        "--allow-port-fallback",
+        help="If the requested port is busy, bind the next free port instead of failing.",
     ),
     no_browser: bool = typer.Option(
         False,
@@ -140,7 +267,7 @@ def analyze(
         help="Do not auto-open the browser when using --serve.",
     ),
 ) -> None:
-    """Analyze a PR: Stage 1 threat modeling + Stage 2 investigation with verdicts."""
+    """Analyze a GitHub PR or repository: discovery + evidence investigation."""
     settings = Settings()
     extra_context = None
     if context_file:
@@ -154,6 +281,15 @@ def analyze(
 
     try:
         provider = FallbackLLMProvider.from_config(settings, preferred_model=model)
+        names = [p.name for p in provider.providers]
+        if names:
+            console.print(
+                f"[dim]LLM priority ({len(names)} models): "
+                f"{names[0]} first"
+                + (f", then {', '.join(names[1:3])}" if len(names) > 1 else "")
+                + ("…" if len(names) > 3 else "")
+                + "[/dim]"
+            )
     except LLMError as exc:
         console.print(f"[red]LLM config error:[/red] {exc}")
         console.print(
@@ -161,12 +297,46 @@ def analyze(
         )
         raise typer.Exit(1) from exc
 
-    registry = SkillRegistry.load()
+    store = ContextStore()
+    interactive = not non_interactive and sys.stdin.isatty()
+    run_logger = RunLogger()
+    report: PipelineReport | None = None
 
     try:
         with GitHubClient(settings.github_token) as gh:
             with console.status("Resolving GitHub target..."):
                 pr = gh.fetch_analysis_target(target, pr_number=pr_number)
+
+            from threatlens.context.collect import repository_id_for
+            from threatlens.context.models import ContextScope, SavedContextAnswer
+
+            repo_id = repository_id_for(pr)
+            run_logger.start(
+                target=target,
+                discovery=discovery,
+                interactive=interactive,
+                repository_id=repo_id,
+                scope=pr.scope,
+            )
+
+            def asker(question: PlannedQuestion) -> str | None:
+                raw = _ask_question(question)
+                answer, should_save = _normalize_asker_answer(raw)
+                if answer is None:
+                    run_logger.note(f"question skipped: {question.key}")
+                    return None
+                run_logger.note(f"answered {question.key}={answer}")
+                if should_save and answer.strip().lower() not in {"unknown", "u"}:
+                    store.upsert(
+                        SavedContextAnswer(
+                            key=question.key,
+                            value=answer,
+                            scope=ContextScope.REPOSITORY,
+                            repository_id=repo_id,
+                            source="developer_answer",
+                        )
+                    )
+                return answer
 
             if pr.scope == "repo":
                 console.print(
@@ -189,29 +359,54 @@ def analyze(
                 )
             )
 
-            with console.status(f"Running pipeline (discovery={discovery})..."):
-                report = run_pipeline(
-                    pr,
-                    provider,
-                    registry,
-                    gh=gh,
-                    extra_context=extra_context,
-                    investigate=not stage1_only,
-                    discovery=discovery,
-                    force_generic=force_generic,
-                )
+            # Do not wrap the pipeline in a Rich status spinner — it hides input().
+            report = run_pipeline(
+                pr,
+                provider,
+                None,
+                gh=gh,
+                extra_context=extra_context,
+                investigate=not stage1_only,
+                discovery=discovery,
+                force_generic=force_generic,
+                context_store=store,
+                interactive=interactive,
+                refresh_context=refresh_context,
+                question_asker=asker if interactive else None,
+                on_progress=_progress_printer(run_logger),
+            )
     except GitHubClientError as exc:
+        run_logger.fail(str(exc))
         console.print(f"[red]GitHub error:[/red] {exc}")
         raise typer.Exit(1) from exc
     except SemgrepError as exc:
+        run_logger.fail(str(exc))
         console.print(f"[red]Semgrep error:[/red] {exc}")
         raise typer.Exit(1) from exc
     except CodeQLError as exc:
+        run_logger.fail(str(exc))
         console.print(f"[red]CodeQL error:[/red] {exc}")
         raise typer.Exit(1) from exc
     except LLMError as exc:
+        run_logger.fail(str(exc))
         console.print(f"[red]LLM error:[/red] {exc}")
         raise typer.Exit(1) from exc
+
+    if report is None:
+        raise typer.Exit(1)
+
+    saved_for_serve: Path | None = None
+    effective_output = output
+    if serve and not effective_output:
+        saved_for_serve = save_report_snapshot(report, run_logger.entry.run_id)
+        effective_output = saved_for_serve
+
+    entry = run_logger.complete(report, output_path=effective_output)
+    console.print(
+        f"[dim]Run logged:[/dim] {default_runs_dir() / (entry.run_id + '.json')}"
+    )
+    if saved_for_serve:
+        console.print(f"[dim]Report saved for re-serve:[/dim] {saved_for_serve}")
 
     if provider.last_provider_name:
         console.print(f"[dim]Model used: {provider.last_provider_name}[/dim]")
@@ -229,14 +424,14 @@ def analyze(
     threat_table.add_column("Name")
     threat_table.add_column("CWEs")
     threat_table.add_column("Investigate")
-    threat_table.add_column("Lens")
+    threat_table.add_column("Investigator")
     for t in tm.threats:
         threat_table.add_row(
             t.threat_id,
             t.name,
             ", ".join(t.cwe_ids) or "-",
             "[green]yes[/green]" if t.investigate else "[dim]no[/dim]",
-            report.skill_matches.get(t.threat_id) or "-",
+            report.investigators.get(t.threat_id) or "-",
         )
     if tm.threats:
         console.print(threat_table)
@@ -247,16 +442,17 @@ def analyze(
         verdict_table = Table(title="Investigation — Verdicts")
         verdict_table.add_column("Finding", style="bold")
         verdict_table.add_column("Verdict")
+        verdict_table.add_column("Policy")
         verdict_table.add_column("Confidence")
-        verdict_table.add_column("Lens")
         verdict_table.add_column("Reasoning (last step)")
         for inv in report.investigations:
-            color = "red" if inv.verdict == "TRUE_POSITIVE" else "green"
+            state = verdict_state(inv.verdict)
+            color = {"tp": "red", "fp": "green", "err": "yellow"}.get(state, "white")
             verdict_table.add_row(
                 inv.threat_id,
-                f"[{color}]{inv.verdict}[/{color}]",
+                f"[{color}]{verdict_label(inv.verdict)}[/{color}]",
+                policy_label(inv.policy_action),
                 f"{inv.confidence}/10",
-                inv.skill_used,
                 inv.reasoning_chain[-1][:70] if inv.reasoning_chain else "-",
             )
         console.print(verdict_table)
@@ -264,6 +460,10 @@ def analyze(
             console.print(f"\n[bold]{inv.threat_id} reasoning chain:[/bold]")
             for i, step in enumerate(inv.reasoning_chain, 1):
                 console.print(f"  {i}. {step}")
+            if inv.unresolved_questions:
+                console.print("[dim]Unresolved:[/dim]")
+                for q in inv.unresolved_questions:
+                    console.print(f"  ? {q}")
 
     for tid, err in report.errors.items():
         console.print(f"[red]Investigation failed for {tid}:[/red] {err}")
@@ -286,18 +486,141 @@ def analyze(
             console.print(f"[dim]Open[/dim] {index}")
         else:
             output.write_text(
-                json.dumps(report.model_dump(), indent=2), encoding="utf-8"
+                json.dumps(report.model_dump(mode="json"), indent=2), encoding="utf-8"
             )
             console.print(f"\n[green]Wrote[/green] {output}")
 
     if serve:
-        _serve(report, port, open_browser=not no_browser)
+        if report.errors:
+            console.print(
+                "[yellow]Some investigations failed (often LLM rate limits). "
+                "The report may be incomplete.[/yellow]"
+            )
+        _serve(
+            report,
+            port,
+            open_browser=not no_browser,
+            allow_port_fallback=allow_port_fallback,
+            run_id=run_logger.entry.run_id,
+            saved_path=saved_for_serve or output,
+        )
+
+
+pr_app.command("analyze", hidden=True)(analyze)
+
+
+@context_app.command("show")
+def context_show(
+    repository: Optional[str] = typer.Option(
+        None, "--repository", help="Filter by repository id (github.com/owner/repo)"
+    ),
+) -> None:
+    """Display saved external context answers."""
+    store = ContextStore()
+    answers = store.list_answers(repository_id=repository, include_expired=True)
+    console.print(f"[dim]Store:[/dim] {default_context_path()}")
+    if not answers:
+        console.print("[yellow]No saved context.[/yellow]")
+        return
+    table = Table(title="Saved context")
+    table.add_column("Key")
+    table.add_column("Value")
+    table.add_column("Scope")
+    table.add_column("Repository")
+    table.add_column("Updated")
+    for a in answers:
+        table.add_row(
+            a.key,
+            str(a.value),
+            a.scope.value,
+            a.repository_id or "—",
+            a.updated_at.isoformat(),
+        )
+    console.print(table)
+
+
+@context_app.command("clear")
+def context_clear(
+    repository: Optional[str] = typer.Option(
+        None, "--repository", help="Clear only this repository's answers"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+) -> None:
+    """Remove saved external context."""
+    store = ContextStore()
+    if not yes:
+        target = repository or "ALL repositories"
+        confirm = console.input(f"Clear saved context for {target}? [y/N] ").strip()
+        if confirm.lower() not in {"y", "yes"}:
+            console.print("[dim]Aborted.[/dim]")
+            raise typer.Exit(0)
+    removed = store.clear(repository_id=repository)
+    console.print(f"[green]Removed {removed} answer(s).[/green]")
+
+
+@context_app.command("configure")
+def context_configure() -> None:
+    """Review saved answers (alias of show for now)."""
+    context_show()
+
+
+@runs_app.command("list")
+def runs_list(
+    limit: int = typer.Option(20, "--limit", help="Maximum runs to show"),
+) -> None:
+    """List recent ThreatLens analysis runs."""
+    logger = RunLogger()
+    runs = logger.list_runs(limit=limit)
+    console.print(f"[dim]Run logs:[/dim] {default_runs_dir()}")
+    if not runs:
+        console.print("[yellow]No runs logged yet.[/yellow]")
+        return
+    table = Table(title="Recent runs")
+    table.add_column("Run ID")
+    table.add_column("Target")
+    table.add_column("Status")
+    table.add_column("Findings")
+    table.add_column("Duration")
+    table.add_column("Started")
+    for run in runs:
+        dur = f"{run.duration_ms}ms" if run.duration_ms is not None else "—"
+        table.add_row(
+            run.run_id,
+            run.target[:48],
+            run.status,
+            str(run.findings_count),
+            dur,
+            run.started_at.isoformat(timespec="seconds"),
+        )
+    console.print(table)
+
+
+@runs_app.command("show")
+def runs_show(
+    run_id: str = typer.Argument(..., help="Run id or prefix (e.g. 20260801T150000)"),
+) -> None:
+    """Show details for one logged run."""
+    logger = RunLogger()
+    entry = logger.get(run_id)
+    if entry is None:
+        console.print(f"[red]Run not found:[/red] {run_id}")
+        raise typer.Exit(1)
+    console.print_json(entry.model_dump_json(indent=2))
 
 
 @report_app.command("serve")
 def report_serve(
     path: Path = typer.Argument(..., help="Path to a saved report JSON dump"),
-    port: int = typer.Option(8000, "--port", help="Port (next free port used if busy)."),
+    port: int = typer.Option(
+        8000,
+        "--port",
+        help="Port (fails if busy unless --allow-port-fallback).",
+    ),
+    allow_port_fallback: bool = typer.Option(
+        False,
+        "--allow-port-fallback",
+        help="If the requested port is busy, bind the next free port instead of failing.",
+    ),
     no_browser: bool = typer.Option(
         False, "--no-browser", help="Do not auto-open the browser."
     ),
@@ -311,4 +634,12 @@ def report_serve(
     except Exception as exc:  # noqa: BLE001 — surface any parse/validation error
         console.print(f"[red]Could not read report JSON:[/red] {exc}")
         raise typer.Exit(1) from exc
-    _serve(report, port, open_browser=not no_browser)
+    run_id = path.stem if path.suffix.lower() == ".json" else None
+    _serve(
+        report,
+        port,
+        open_browser=not no_browser,
+        allow_port_fallback=allow_port_fallback,
+        run_id=run_id,
+        saved_path=path,
+    )

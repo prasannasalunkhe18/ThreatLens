@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import httpx
 
-from threatlens.providers.base import LLMError, LLMProvider, Usage
+from threatlens.providers.base import LLMError, LLMProvider, Usage, parse_retry_after
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -52,6 +52,7 @@ class OpenRouterProvider(LLMProvider):
             raise LLMError(
                 f"OpenRouter rate-limit/unavailable ({self.model}): {response.status_code}",
                 retryable=True,
+                retry_after=parse_retry_after(response),
             )
         if response.status_code >= 400:
             raise LLMError(

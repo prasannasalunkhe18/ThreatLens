@@ -1,10 +1,11 @@
 import json
 
+from conftest import evidence_json
 from threatlens.github_client import PRFile, PullRequest
+from threatlens.models import Threat
 from threatlens.pipeline import run_pipeline
-from threatlens.skills.registry import SkillRegistry
 from threatlens.stages.investigate import build_investigation_prompt
-from threatlens.models import Skill, Threat
+from threatlens.verdict import Verdict
 
 
 def make_pr() -> PullRequest:
@@ -64,48 +65,34 @@ STAGE1_RESPONSE = json.dumps(
     }
 )
 
-STAGE2_RESPONSE = json.dumps(
-    {
-        "threat_id": "T1",
-        "verdict": "TRUE_POSITIVE",
-        "confidence": 9,
-        "reasoning_chain": [
-            "source: request.args['q'] in search.py",
-            "sink: cursor.execute f-string, no parameterization",
-            "conclusion: reachable SQLi",
-        ],
-    }
-)
+STAGE2_RESPONSE = evidence_json("T1")
 
 
 def test_pipeline_investigates_only_flagged_threats():
     provider = ScriptedProvider([STAGE1_RESPONSE, STAGE2_RESPONSE])
-    registry = SkillRegistry.load()
-    report = run_pipeline(make_pr(), provider, registry, gh=None, discovery="llm")
+    report = run_pipeline(make_pr(), provider, None, gh=None, discovery="llm")
 
     assert report.discovery == "llm"
     assert len(report.threat_model.threats) == 2
     assert len(report.investigations) == 1  # only T1 flagged
     inv = report.investigations[0]
     assert inv.threat_id == "T1"
-    assert inv.verdict == "TRUE_POSITIVE"
-    assert report.skill_matches["T1"].startswith("Injection")
-    assert inv.skill_used.startswith("Injection")
-    # Investigation prompt must contain the skill checklist and the diff
-    assert "Checklist" in provider.prompts[1]
+    assert inv.verdict == Verdict.CONFIRMED
+    assert report.investigators["T1"] == "evidence_investigator_v1"
+    assert inv.investigator == "evidence_investigator_v1"
+    assert "evidence_investigator_v1" in provider.prompts[1]
     assert "search.py" in provider.prompts[1]
 
 
 def test_pipeline_stage1_only():
     provider = ScriptedProvider([STAGE1_RESPONSE])
-    registry = SkillRegistry.load()
     report = run_pipeline(
-        make_pr(), provider, registry, gh=None, discovery="llm", investigate=False
+        make_pr(), provider, None, gh=None, discovery="llm", investigate=False
     )
     assert report.investigations == []
 
 
-def test_investigation_prompt_without_skill():
+def test_investigation_prompt_without_hints():
     threat = Threat(
         threat_id="T9",
         name="Weird thing",
@@ -113,14 +100,12 @@ def test_investigation_prompt_without_skill():
         cwe_ids=["CWE-9999"],
         investigate=True,
     )
-    prompt = build_investigation_prompt(make_pr(), threat, None, "")
-    assert "GENERIC" in prompt
-    assert "source" in prompt.lower()
+    prompt = build_investigation_prompt(make_pr(), threat, "")
+    assert "evidence_investigator_v1" in prompt
+    assert "attacker" in prompt.lower() or "source" in prompt.lower()
 
 
-def test_investigation_prompt_includes_reachability():
-    registry = SkillRegistry.load()
-    skill: Skill = registry.match(["CWE-89"])
+def test_investigation_prompt_includes_optional_hints():
     threat = Threat(
         threat_id="T1",
         name="SQLi",
@@ -128,6 +113,7 @@ def test_investigation_prompt_includes_reachability():
         cwe_ids=["CWE-89"],
         investigate=True,
     )
-    prompt = build_investigation_prompt(make_pr(), threat, skill, "file ctx here")
-    assert "Reachability definition" in prompt
+    prompt = build_investigation_prompt(make_pr(), threat, "file ctx here")
+    assert "Optional vulnerability-specific hints" in prompt
+    assert "parameterized" in prompt.lower()
     assert "file ctx here" in prompt

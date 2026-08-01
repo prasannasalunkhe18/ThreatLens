@@ -5,10 +5,47 @@ Pages are held in memory (path → bytes) — nothing written to disk.
 
 from __future__ import annotations
 
+import socket
 import webbrowser
+from collections.abc import Callable
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAX_PORT_TRIES = 20
+
+
+class PortInUseError(OSError):
+    """Raised when the requested port is already bound by another process."""
+
+
+@dataclass(frozen=True)
+class ServeInfo:
+    url: str
+    host: str
+    port: int
+    requested_port: int
+    port_fallback: bool
+
+
+def is_port_in_use(host: str, port: int) -> bool:
+    """Return True when something is already accepting TCP connections on ``port``."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex((host, port)) == 0
+
+
+def port_in_use_message(host: str, port: int) -> str:
+    return (
+        f"Port {port} on {host} is already in use — another report may still be "
+        f"running there.\n"
+        f"Stop the old ThreatLens server (Ctrl+C in its terminal) or free the port, "
+        f"then re-run.\n"
+        f"Windows: for /f \"tokens=5\" %a in ('netstat -ano ^| findstr :{port} "
+        f"^| findstr LISTENING') do taskkill /PID %a /F\n"
+        f"Or serve a saved report on another port:\n"
+        f"  threatlens report serve <report.json> --port {port + 1}\n"
+        f"Or allow auto-fallback: add --allow-port-fallback"
+    )
 
 
 def _make_handler(pages: dict[str, bytes]):
@@ -41,7 +78,8 @@ def serve_pages(
     host: str = "127.0.0.1",
     port: int = 8000,
     open_browser: bool = True,
-    on_start=None,
+    allow_port_fallback: bool = False,
+    on_start: Callable[[ServeInfo], None] | None = None,
 ) -> None:
     """Serve ``pages`` (URL path → HTML) until Ctrl+C."""
     encoded = {p: html.encode("utf-8") for p, html in pages.items()}
@@ -52,21 +90,38 @@ def serve_pages(
     server: ThreadingHTTPServer | None = None
     last_err: OSError | None = None
     chosen = port
-    for candidate in range(port, port + MAX_PORT_TRIES):
+    port_fallback = False
+
+    if not allow_port_fallback and is_port_in_use(host, port):
+        raise PortInUseError(port_in_use_message(host, port))
+
+    port_range = range(port, port + MAX_PORT_TRIES) if allow_port_fallback else range(port, port + 1)
+    for candidate in port_range:
         try:
             server = ThreadingHTTPServer((host, candidate), handler)
             chosen = candidate
+            port_fallback = candidate != port
             break
         except OSError as exc:
             last_err = exc
+
     if server is None:
-        raise OSError(
-            f"Could not bind a port in {port}..{port + MAX_PORT_TRIES - 1}: {last_err}"
-        )
+        if allow_port_fallback:
+            raise OSError(
+                f"Could not bind a port in {port}..{port + MAX_PORT_TRIES - 1}: {last_err}"
+            )
+        raise PortInUseError(port_in_use_message(host, port))
 
     url = f"http://{host}:{chosen}/"
+    info = ServeInfo(
+        url=url,
+        host=host,
+        port=chosen,
+        requested_port=port,
+        port_fallback=port_fallback,
+    )
     if on_start is not None:
-        on_start(url)
+        on_start(info)
     if open_browser:
         try:
             webbrowser.open(url)
@@ -87,7 +142,8 @@ def serve_html(
     host: str = "127.0.0.1",
     port: int = 8000,
     open_browser: bool = True,
-    on_start=None,
+    allow_port_fallback: bool = False,
+    on_start: Callable[[ServeInfo], None] | None = None,
 ) -> None:
     """Back-compat: serve a single HTML document at ``/``."""
     serve_pages(
@@ -95,5 +151,6 @@ def serve_html(
         host=host,
         port=port,
         open_browser=open_browser,
+        allow_port_fallback=allow_port_fallback,
         on_start=on_start,
     )

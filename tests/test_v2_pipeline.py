@@ -1,24 +1,12 @@
-import json
-
+from conftest import evidence_json
 from threatlens.models import Finding
 from threatlens.pipeline import (
     finding_to_threat,
     run_pipeline,
     threat_model_from_findings,
 )
-from threatlens.skills.registry import SkillRegistry
+from threatlens.verdict import Verdict
 from test_pipeline import ScriptedProvider, make_pr
-
-
-def _verdict(threat_id: str, skill_echo: str = "x") -> str:
-    return json.dumps(
-        {
-            "threat_id": threat_id,
-            "verdict": "TRUE_POSITIVE",
-            "confidence": 8,
-            "reasoning_chain": ["source", "sink", "conclusion"],
-        }
-    )
 
 
 def test_finding_to_threat_carries_cwes():
@@ -52,48 +40,45 @@ def test_threat_model_from_findings_summary():
     assert "default-branch files" in tm_repo.pr_summary
 
 
-def test_semgrep_pipeline_with_matched_skill():
+def test_semgrep_pipeline_uses_evidence_investigator():
     findings = [Finding(finding_id="F1", cwe_ids=["CWE-89"], rule_id="sql", message="m")]
-    provider = ScriptedProvider([_verdict("F1")])
-    registry = SkillRegistry.load()
+    provider = ScriptedProvider([evidence_json("F1")])
     report = run_pipeline(
-        make_pr(), provider, registry, gh=None, precomputed_findings=findings
+        make_pr(), provider, None, gh=None, precomputed_findings=findings
     )
     assert report.discovery == "semgrep"
     assert len(report.investigations) == 1
-    assert report.investigations[0].skill_used.startswith("Injection")
+    assert report.investigations[0].investigator == "evidence_investigator_v1"
+    assert report.investigations[0].verdict == Verdict.CONFIRMED
 
 
-def test_no_finding_dropped_on_registry_miss():
-    """Core v2 guarantee: an unknown CWE still yields a full InvestigationResult."""
+def test_no_finding_dropped_without_hints():
+    """Core guarantee: unknown CWE still yields a full InvestigationResult."""
     findings = [
         Finding(finding_id="F1", cwe_ids=["CWE-9999"], rule_id="weird", message="m"),
         Finding(finding_id="F2", cwe_ids=[], rule_id="no-cwe", message="m"),
     ]
-    provider = ScriptedProvider([_verdict("F1"), _verdict("F2")])
-    registry = SkillRegistry.load()
+    provider = ScriptedProvider([evidence_json("F1"), evidence_json("F2")])
     report = run_pipeline(
-        make_pr(), provider, registry, gh=None, precomputed_findings=findings
+        make_pr(), provider, None, gh=None, precomputed_findings=findings
     )
     assert len(report.investigations) == 2
     for inv in report.investigations:
-        assert inv.skill_used == "generic"
-        assert inv.verdict in ("TRUE_POSITIVE", "FALSE_POSITIVE")
-    # Every finding is accounted for (investigated or errored), none dropped.
+        assert inv.investigator == "evidence_investigator_v1"
+        assert inv.verdict == Verdict.CONFIRMED
     handled = {i.threat_id for i in report.investigations} | set(report.errors)
     assert handled == {"F1", "F2"}
 
 
-def test_force_generic_ignores_skills():
+def test_force_generic_is_noop():
     findings = [Finding(finding_id="F1", cwe_ids=["CWE-89"], rule_id="sql", message="m")]
-    provider = ScriptedProvider([_verdict("F1")])
-    registry = SkillRegistry.load()
+    provider = ScriptedProvider([evidence_json("F1")])
     report = run_pipeline(
         make_pr(),
         provider,
-        registry,
+        None,
         gh=None,
         precomputed_findings=findings,
         force_generic=True,
     )
-    assert report.investigations[0].skill_used == "generic"
+    assert report.investigations[0].investigator == "evidence_investigator_v1"

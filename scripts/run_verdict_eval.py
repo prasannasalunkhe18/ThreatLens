@@ -21,7 +21,8 @@ from threatlens.github_client import GitHubClient, GitHubClientError  # noqa: E4
 from threatlens.pipeline import run_pipeline  # noqa: E402
 from threatlens.providers.base import LLMError  # noqa: E402
 from threatlens.providers.chain import FallbackLLMProvider  # noqa: E402
-from threatlens.skills.registry import SkillRegistry  # noqa: E402
+from threatlens.report_labels import is_actionable  # noqa: E402
+from threatlens.verdict import Verdict  # noqa: E402
 
 console = Console()
 VERDICTS_PATH = ROOT / "eval" / "verdicts.yaml"
@@ -35,7 +36,7 @@ CWE_ALIASES = {
 
 
 def score(expect: dict, report) -> dict:
-    tps = [i for i in report.investigations if i.verdict == "TRUE_POSITIVE"]
+    tps = [i for i in report.investigations if is_actionable(i.verdict)]
     n_tp = len(tps)
     lo = expect.get("min_true_positives", 0)
     hi = expect.get("max_true_positives", 99)
@@ -70,7 +71,6 @@ def main() -> int:
         return 2
 
     labeled = yaml.safe_load(VERDICTS_PATH.read_text(encoding="utf-8"))["prs"]
-    registry = SkillRegistry.load()
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_path = RUNS_DIR / f"verdicts_{stamp}.json"
@@ -90,7 +90,9 @@ def main() -> int:
             console.print(f"\n[bold]{cid}[/bold] {url}")
             try:
                 pr = gh.fetch_pr(url)
-                report = run_pipeline(pr, provider, registry, gh=gh, discovery="semgrep")
+                report = run_pipeline(
+                    pr, provider, None, gh=gh, discovery="semgrep", interactive=False
+                )
             except (GitHubClientError, LLMError, SemgrepError) as exc:
                 console.print(f"  [red]ERROR[/red] {exc}")
                 results.append({"id": cid, "url": url, "error": str(exc), "passed": False})
@@ -99,9 +101,10 @@ def main() -> int:
 
             scored = score(expect, report)
             for inv in report.investigations:
-                color = "red" if inv.verdict == "TRUE_POSITIVE" else "green"
+                color = "red" if is_actionable(inv.verdict) else "green"
+                v = inv.verdict.value if isinstance(inv.verdict, Verdict) else inv.verdict
                 console.print(
-                    f"  [{color}]{inv.verdict}[/{color}] {inv.threat_id} "
+                    f"  [{color}]{v}[/{color}] {inv.threat_id} "
                     f"conf={inv.confidence}"
                 )
             results.append(

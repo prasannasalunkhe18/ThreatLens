@@ -28,4 +28,13 @@ BANNER = f"{OWL}\n\n{TITLE}"
 def render_banner(console: Console | None = None) -> None:
     """Print the banner as-is: no markup, no highlighting, no wrapping."""
     console = console or Console()
-    console.print(BANNER, markup=False, highlight=False, soft_wrap=True)
+    try:
+        console.print(BANNER, markup=False, highlight=False, soft_wrap=True)
+    except UnicodeEncodeError:
+        # Last resort if the host console still cannot encode block glyphs.
+        console.print(OWL, markup=False, highlight=False, soft_wrap=True)
+        console.print(
+            "THREATLENS - Watching Every Code Path - By Prasanna",
+            markup=False,
+            highlight=False,
+        )
