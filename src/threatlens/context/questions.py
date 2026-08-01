@@ -100,24 +100,12 @@ def plan_questions(
         seen_keys.add(q.key)
         planned.append(q)
 
-    add(
-        PlannedQuestion(
-            key="is_demo_or_training_app",
-            prompt=(
-                "Quick orientation.\n\n"
-                f"Is `{sample_file}` part of a demo, training, or intentionally "
-                "vulnerable lab app (not a real customer system)?"
-            ),
-            why="Labs are still assessed technically, but urgency and merge policy differ.",
-            finding_ids=all_ids,
-            priority=5,
-        )
-    )
+    # Every scan is treated as a real production system — never ask demo/lab questions.
     add(
         PlannedQuestion(
             key="untrusted_users_reachable",
             prompt=(
-                f"ThreatLens found issues near `{sample_file}`.\n\n"
+                f"ThreatLens found a possible issue in `{sample_file}`.\n\n"
                 "Can untrusted users (internet, customers, or other tenants) "
                 "reach the affected functionality?"
             ),
@@ -351,12 +339,6 @@ def apply_answer_to_contexts(
             ctx.external_context.authentication_required = flag
         elif key == "handles_sensitive_data":
             ctx.external_context.handles_sensitive_data = flag
-        elif key == "is_demo_or_training_app":
-            ctx.external_context.is_demo_or_training_app = flag
-            if flag is True:
-                ctx.external_context.deployment_environment = "demo_or_training"
-            elif flag is False:
-                ctx.external_context.deployment_environment = "not_demo"
         elif key == "edge_controls_present":
             ctx.external_context.edge_controls_present = (
                 "yes" if flag is True else "no" if flag is False else None

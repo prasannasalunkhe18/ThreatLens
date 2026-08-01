@@ -118,6 +118,32 @@ def test_ai_interview_falls_back_on_provider_failure():
     assert planned == candidates
 
 
+def test_ai_drops_demo_lab_custom_questions():
+    ctx = _ctx()
+    candidates = plan_questions([ctx])
+    provider = StubProvider(
+        {
+            "questions": [
+                {
+                    "key": "custom_is_demo",
+                    "prompt": "Is this an intentionally vulnerable lab app?",
+                    "why": "Demo apps are lower priority.",
+                    "priority": 1,
+                },
+                {
+                    "key": "untrusted_users_reachable",
+                    "prompt": "Can untrusted users reach this path?",
+                    "why": "Exposure.",
+                    "priority": 2,
+                },
+            ]
+        }
+    )
+    planned = plan_interview_with_ai([ctx], candidates, provider)
+    assert "custom_is_demo" not in {q.key for q in planned}
+    assert all("intentionally vulnerable" not in q.prompt.lower() for q in planned)
+
+
 def test_ai_followups_respect_cap_and_yes_no():
     ctx = _ctx()
     apply_answer_to_contexts([ctx], "untrusted_users_reachable", "Yes")

@@ -58,8 +58,8 @@ class ExternalContext(BaseModel):
     proxy_blocks_private_destinations: bool | None = None
     authentication_required: bool | None = None
     handles_sensitive_data: bool | None = None
-    is_demo_or_training_app: bool | None = None
-    deployment_environment: str | None = None
+    # Always treat scans as production-level triage (never ask demo/lab questions).
+    deployment_environment: str | None = "production"
     edge_controls_present: str | None = None
     secrets_are_live: bool | None = None
     ssrf_allowlist_enforced: bool | None = None

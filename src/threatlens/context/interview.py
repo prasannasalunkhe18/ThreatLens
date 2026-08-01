@@ -19,21 +19,49 @@ from threatlens.context.questions import YES_NO_UNKNOWN, PlannedQuestion
 from threatlens.providers.base import LLMError, LLMProvider
 from threatlens.providers.chain import call_with_schema
 
+_PRODUCTION_RULES = (
+    "Treat every repository as a real production system. "
+    "NEVER ask whether this is a demo, training app, CTF, lab, intentionally "
+    "vulnerable app, juice shop, or similar. "
+    "Ask only operational/security questions that change exploitability, impact, "
+    "or merge policy for production triage."
+)
+
 PLAN_SYSTEM = (
     "You are a staff application-security engineer interviewing a developer "
-    "about scanner findings. Speak plainly. Every question MUST be answerable "
-    "with only Yes, No, or Unknown. Do not hesitate to ask what you need for "
-    "triage. Prefer candidate keys from the catalog; you may add a few custom "
-    "follow-ups when the catalog is incomplete. Do not invent that controls exist."
+    "about scanner findings in a production service. Speak plainly. "
+    "Every question MUST be answerable with only Yes, No, or Unknown. "
+    "Do not hesitate to ask what you need for triage. "
+    "Prefer candidate keys from the catalog; you may add a few custom "
+    "follow-ups when the catalog is incomplete. Do not invent that controls exist. "
+    + _PRODUCTION_RULES
 )
 
 FOLLOWUP_SYSTEM = (
-    "You are continuing a security interview with a developer. "
+    "You are continuing a production security interview with a developer. "
     "Based on Yes/No/Unknown answers so far, ask only additional questions that "
     "still matter for exploitability, impact, or merge policy. "
     "Every question MUST be Yes/No/Unknown. If nothing important remains, return "
-    "an empty questions list."
+    "an empty questions list. "
+    + _PRODUCTION_RULES
 )
+
+_DEMO_LAB_HINTS = (
+    "demo",
+    "training",
+    "intentionally vulnerable",
+    "vulnerable lab",
+    "ctf",
+    "juice shop",
+    "not a real",
+    "toy app",
+    "sample app",
+)
+
+
+def _looks_like_demo_lab_question(text: str) -> bool:
+    low = (text or "").lower()
+    return any(token in low for token in _DEMO_LAB_HINTS)
 
 MAX_CUSTOM_QUESTIONS = 4
 MAX_FOLLOWUPS = 3
@@ -116,11 +144,17 @@ def _merge_ai_plan(
             if key in seen:
                 continue
             seen.add(key)
+            rewritten = (item.prompt or "").strip()
+            prompt = rewritten or base.prompt
+            why = (item.why or base.why).strip() or base.why
+            # Reject AI rewrites that turn a real question into a demo/lab check.
+            if _looks_like_demo_lab_question(prompt) or _looks_like_demo_lab_question(why):
+                prompt, why = base.prompt, base.why
             out.append(
                 PlannedQuestion(
                     key=base.key,
-                    prompt=(item.prompt or base.prompt).strip() or base.prompt,
-                    why=(item.why or base.why).strip() or base.why,
+                    prompt=prompt,
+                    why=why,
                     choices=YES_NO_UNKNOWN,
                     scope=base.scope,
                     finding_ids=base.finding_ids or all_ids,
@@ -138,7 +172,9 @@ def _merge_ai_plan(
             continue
         prompt = (item.prompt or "").strip()
         why = (item.why or "").strip() or "Needed to judge exploitability or impact."
-        if not prompt or not prompt.endswith("?"):
+        if not prompt or "?" not in prompt:
+            continue
+        if _looks_like_demo_lab_question(prompt) or _looks_like_demo_lab_question(why):
             continue
         seen.add(custom_key)
         out.append(
@@ -193,6 +229,8 @@ def plan_interview_with_ai(
             "You may add up to 4 custom_* questions not in the catalog.",
             "Prefer known keys from candidate_questions when possible.",
             "Always include block_on_confirmed_high if present in candidates.",
+            "Never ask if this is a demo/lab/training/intentionally vulnerable app.",
+            "Treat the target as a real production system.",
         ],
     }
     prompt = (
@@ -236,6 +274,8 @@ def plan_followups_with_ai(
             "Skip anything already answered.",
             "Use custom_* keys for new topics.",
             "Return empty questions if nothing important remains.",
+            "Never ask if this is a demo/lab/training/intentionally vulnerable app.",
+            "Treat the target as a real production system.",
         ],
     }
     prompt = (
@@ -261,15 +301,17 @@ def plan_followups_with_ai(
         if not (_CUSTOM_KEY_RE.match(key) or key.startswith("custom_")):
             continue
         prompt_text = (item.prompt or "").strip()
+        why = (item.why or "").strip() or "Follow-up needed after earlier answers."
         if "?" not in prompt_text:
+            continue
+        if _looks_like_demo_lab_question(prompt_text) or _looks_like_demo_lab_question(why):
             continue
         seen.add(key)
         out.append(
             PlannedQuestion(
                 key=key,
                 prompt=prompt_text,
-                why=(item.why or "").strip()
-                or "Follow-up needed after earlier answers.",
+                why=why,
                 choices=YES_NO_UNKNOWN,
                 scope="repository",
                 finding_ids=all_ids,

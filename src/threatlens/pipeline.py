@@ -179,7 +179,6 @@ def _hydrate_external_from_store(
         return
     for ctx in contexts:
         for key in (
-            "is_demo_or_training_app",
             "untrusted_users_reachable",
             "authentication_required",
             "handles_sensitive_data",

@@ -2,7 +2,7 @@
 
 Humans answer simply. This step turns those answers + finding metadata into
 investigation guidance the evidence investigator can use without inventing
-facts beyond the interview.
+facts beyond the interview. Every target is treated as production-level.
 """
 
 from __future__ import annotations
@@ -14,12 +14,14 @@ from threatlens.providers.base import LLMError, LLMProvider
 from threatlens.providers.chain import call_with_schema
 
 SYSTEM_PROMPT = (
-    "You are a staff application-security engineer helping triage scanner findings. "
+    "You are a staff application-security engineer helping triage scanner findings "
+    "for a real production system. "
     "A developer answered Yes/No/Unknown interview questions. "
     "Produce concise decision guidance for the investigator. "
     "Do not invent infrastructure facts the developer did not affirm. "
     "Treat Unknown as unknown — state assumptions explicitly when you must proceed. "
-    "If the app looks like a demo/lab, say so and still assess technical exploitability."
+    "Never classify or soften findings because the repo might be a demo or lab — "
+    "always triage as production."
 )
 
 
@@ -43,10 +45,6 @@ class ContextDecisionBrief(BaseModel):
     compensating_controls_to_verify: list[str] = Field(
         default_factory=list,
         description="Controls claimed or implied that code review should verify",
-    )
-    likely_demo_or_lab: bool | None = Field(
-        default=None,
-        description="True if answers/CWEs strongly suggest a training/demo app",
     )
 
 
@@ -81,11 +79,13 @@ def build_decision_prompt(contexts: list[FindingContext]) -> str:
         "repository_id": repo.repository_id if repo else None,
         "language": repo.language if repo else None,
         "framework": repo.framework if repo else None,
+        "deployment_assumption": "production",
         "developer_answers_yes_no_unknown": _answers_blob(contexts),
         "findings": _findings_blob(contexts),
     }
     return (
         "Synthesize the developer interview into an investigation decision brief.\n"
+        "Treat the target as a real production system.\n"
         "Answers are only Yes / No / Unknown (or absent).\n\n"
         f"```json\n{json.dumps(payload, indent=2)}\n```\n\n"
         "Return JSON matching ContextDecisionBrief."
@@ -118,9 +118,8 @@ def synthesize_context_decisions(
     for ctx in contexts:
         ctx.external_context.decision_brief = brief.model_dump()
         ctx.external_context.compensating_controls_note = brief.summary
-        if brief.likely_demo_or_lab is True and not ctx.external_context.deployment_environment:
-            ctx.external_context.deployment_environment = "demo_or_training"
-        elif brief.likely_demo_or_lab is False and not ctx.external_context.deployment_environment:
-            ctx.external_context.deployment_environment = "production_likely"
+        ctx.external_context.deployment_environment = (
+            ctx.external_context.deployment_environment or "production"
+        )
         ctx.external_context.answers["decision_brief"] = text[:2000]
     return brief

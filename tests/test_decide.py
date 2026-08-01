@@ -45,7 +45,6 @@ def test_synthesize_attaches_decision_brief():
         repo,
     )
     apply_answer_to_contexts([ctx], "untrusted_users_reachable", "Yes")
-    apply_answer_to_contexts([ctx], "is_demo_or_training_app", "Unknown")
 
     brief_payload = {
         "exposure_level": "high",
@@ -53,7 +52,6 @@ def test_synthesize_attaches_decision_brief():
         "assumptions": ["No WAF confirmed"],
         "investigation_priorities": ["Trace user input to SQL sink"],
         "compensating_controls_to_verify": ["Parameterized queries"],
-        "likely_demo_or_lab": False,
     }
     provider = StubProvider(brief_payload)
     brief = synthesize_context_decisions([ctx], provider)

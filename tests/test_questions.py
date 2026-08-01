@@ -55,7 +55,6 @@ def test_baseline_questions_always_asked_for_any_finding():
     )
     keys = {q.key for q in plan_questions([sqli])}
     assert {
-        "is_demo_or_training_app",
         "untrusted_users_reachable",
         "authentication_required",
         "handles_sensitive_data",
@@ -63,6 +62,11 @@ def test_baseline_questions_always_asked_for_any_finding():
         "edge_controls_present",
         "block_on_confirmed_high",
     } <= keys
+    assert "is_demo_or_training_app" not in keys
+    for q in plan_questions([sqli]):
+        assert "demo" not in q.prompt.lower()
+        assert "training" not in q.prompt.lower()
+        assert "intentionally vulnerable" not in q.prompt.lower()
     assert "outbound_proxy_blocks_private" not in keys
     assert "injection_runs_privileged" in keys
 
@@ -138,7 +142,6 @@ def test_apply_answer_yes_no_unknown():
     )
     apply_answer_to_contexts([ctx], "authentication_required", "No")
     assert ctx.external_context.authentication_required is False
-    apply_answer_to_contexts([ctx], "is_demo_or_training_app", "Yes")
-    assert ctx.external_context.is_demo_or_training_app is True
     apply_answer_to_contexts([ctx], "handles_sensitive_data", "Unknown")
     assert ctx.external_context.handles_sensitive_data is None
+    assert ctx.external_context.deployment_environment == "production"
