@@ -12,6 +12,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from threatlens import __version__
+from threatlens.banner import render_banner
 from threatlens.config import Settings
 from threatlens.discovery import CodeQLError, SemgrepError
 from threatlens.github_client import GitHubClient, GitHubClientError
@@ -148,7 +149,8 @@ def analyze(
             raise typer.Exit(1)
         extra_context = context_file.read_text(encoding="utf-8")
 
-    console.print(f"[bold]ThreatLens[/bold] analyzing {target}")
+    render_banner(console)
+    console.print(f"\n[bold]ThreatLens[/bold] analyzing {target}")
 
     try:
         provider = FallbackLLMProvider.from_config(settings, preferred_model=model)
